@@ -1,0 +1,62 @@
+# UtaTUI configuration.
+# Copy to ~/.config/utatui/config.toml. Every key is optional; these are the defaults.
+
+# Substring of a player's bus name or identity to prefer when several are playing.
+# preferred_player = "spotify"
+
+# Seek step in seconds.
+seek_step = 5
+
+# Plain ASCII glyphs for terminals/fonts without good Unicode coverage.
+ascii = false
+
+[theme]
+accent = "#b4a7f5"
+foreground = "#e6e6ef"
+dim = "#6e6c86"
+# Empty keeps the terminal background. Any "#rrggbb" or color name works.
+background = ""
+# Take the accent color from the current artwork.
+accent_from_artwork = true
+
+[artwork]
+show = true
+# Fraction of the terminal height the artwork may use (0.1 - 0.9).
+size = 0.5
+# "auto" asks the terminal; or force "kitty", "sixel", "iterm2", "halfblocks".
+protocol = "auto"
+
+[visualizer]
+enabled = true
+# bars | mirror | wave | blocks | minimal  (cycle at runtime with `v`)
+mode = "bars"
+bars = 48
+spacing = 1
+# cava sensitivity in percent.
+sensitivity = 100
+# Frames per second from cava; also the redraw rate while audio flows.
+framerate = 60
+# cava smoothing 0 - 100: higher is smoother and slower.
+noise_reduction = 77
+# Rows reserved for the visualizer.
+height = 8
+# Gradient from bottom to top. A single color gives a solid fill;
+# ["accent"] builds a gradient from the current accent color.
+colors = ["#5e60ce", "#7b6cf6", "#b4a7f5", "#f2c4de"]
+cava_path = "cava"
+
+# Key names: single characters ("n", "N", "?"), "space", "tab", "enter", "esc",
+# "left", "right", "up", "down", optionally prefixed with "ctrl+". Ctrl+C always quits.
+[keys]
+quit = ["q", "esc"]
+play_pause = ["space"]
+next = ["n"]
+previous = ["p"]
+stop = ["s"]
+seek_forward = ["right", "l"]
+seek_backward = ["left", "h"]
+player_selector = ["tab"]
+next_player = ["]"]
+visualizer_mode = ["v"]
+help = ["?"]
+settings = ["o", ","]

@@ -1,0 +1,46 @@
+[package]
+name = "utatui"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+description = "An artwork-first Now Playing dashboard for MPRIS media players, with a cava-powered visualizer"
+authors = ["NunoiEnter"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/NunoiEnter/Utatui"
+readme = "README.md"
+keywords = ["tui", "mpris", "music", "ratatui", "visualizer"]
+categories = ["command-line-utilities", "multimedia::audio"]
+exclude = ["/.github", "/flake.nix", "/flake.lock"]
+
+[profile.release]
+lto = "thin"
+strip = true
+
+[dependencies]
+futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+ratatui = "0.30.2"
+ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm", "tokio"] }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "process", "time", "io-util", "fs"] }
+toml = "1.1.8"
+unicode-width = "0.2.3"
+ureq = "3.5.0"
+zbus = { version = "6.2.1", default-features = false, features = ["tokio"] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Rendering math converts freely between cell counts, pixels and ratios.
+cast_possible_truncation = "allow"
+cast_precision_loss = "allow"
+cast_sign_loss = "allow"
+cast_possible_wrap = "allow"
+cast_lossless = "allow"
+many_single_char_names = "allow"
+struct_excessive_bools = "allow"
+module_name_repetitions = "allow"
+# Product names such as UtaTUI and MPRIS are not code.
+doc_markdown = "allow"
