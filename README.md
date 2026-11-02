@@ -66,6 +66,17 @@ Then install cava for the visualizer, for example `sudo pacman -S cava`,
 
 To uninstall, delete the binary: `rm ~/.local/bin/utatui`.
 
+### Arch Linux
+
+A [`PKGBUILD`](packaging/aur/utatui-git/PKGBUILD) is included and will be published to the
+AUR as `utatui-git`. Until then, build it with `makepkg`:
+
+```sh
+git clone https://github.com/NunoiEnter/Utatui
+cd Utatui/packaging/aur/utatui-git
+makepkg -si
+```
+
 ### Nix (flake)
 
 Run it once without installing:

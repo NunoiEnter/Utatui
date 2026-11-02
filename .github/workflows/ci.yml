@@ -21,3 +21,26 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --locked -- -D warnings
       - run: cargo test --locked
+
+  arch-package:
+    name: Arch PKGBUILD
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      # git must exist before checkout, or it falls back to a tarball without history.
+      - run: pacman -Syu --noconfirm --needed base-devel git rust
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Build package with makepkg
+        run: |
+          useradd -m builder
+          cp -r packaging/aur/utatui-git /home/builder/pkg
+          # Build the commit under test instead of upstream main.
+          sed -i "s|git+https://github.com/NunoiEnter/Utatui.git|git+file://$GITHUB_WORKSPACE|" /home/builder/pkg/PKGBUILD
+          git config --global --add safe.directory '*'
+          cp /root/.gitconfig /home/builder/.gitconfig
+          chown -R builder /home/builder
+          su builder -c 'cd ~/pkg && makepkg --noconfirm && makepkg --printsrcinfo > .SRCINFO'
+          pacman -U --noconfirm /home/builder/pkg/*.pkg.tar.zst
+          utatui --version

@@ -1,0 +1,50 @@
+# Maintainer: NunoiEnter <nunoiauto3749@gmail.com>
+
+pkgname=utatui-git
+_pkgname=utatui
+pkgver=r0.0000000
+pkgrel=1
+pkgdesc="Artwork-first Now Playing dashboard for MPRIS media players, with a cava-powered visualizer"
+arch=('x86_64' 'aarch64')
+url="https://github.com/NunoiEnter/Utatui"
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo' 'git')
+optdepends=('cava: real-time audio visualizer')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+options=('!lto')
+source=("$_pkgname::git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd "$_pkgname"
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$_pkgname"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --frozen
+}
+
+package() {
+    cd "$_pkgname"
+    install -Dm755 target/release/utatui "$pkgdir/usr/bin/utatui"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 config.example.toml "$pkgdir/usr/share/doc/$pkgname/config.example.toml"
+}
