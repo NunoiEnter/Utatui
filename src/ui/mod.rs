@@ -171,35 +171,41 @@ const INFO_H: u16 = 7;
 const COMPACT_INFO_H: u16 = 4;
 
 fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette, g: &Glyphs) {
-    let landscape = area.width > area.height * 4 && area.height >= INFO_H;
-    let show_art = app.cfg.artwork.show && app.art.is_some();
-
-    if landscape && show_art {
-        // Wide, short terminals: artwork left, details right.
-        let art_h = area.height.saturating_sub(2);
-        let art_w = (art_h * 2).min(area.width / 2);
-        let [_, art_col, _, info_col, _] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(art_w),
-            Constraint::Length(4),
-            Constraint::Length(area.width.saturating_sub(art_w + 8).min(60)),
-            Constraint::Fill(1),
-        ])
-        .areas(area);
-        draw_art(f, app, art_col.inner(Margin::new(0, 1)));
-        let [info] = Layout::vertical([Constraint::Length(INFO_H)]).flex(Flex::Center).areas(info_col);
-        draw_info(f, p, info, pal, g, Alignment::Left, false);
-        return;
-    }
-
     let compact = area.height < INFO_H;
     let info_h = if compact { COMPACT_INFO_H } else { INFO_H };
+    let show_art = app.cfg.artwork.show && app.art.is_some();
+
+    // Artwork above the text, as tall as the config allows and the space permits.
     let size = app.cfg.artwork.size.clamp(0.1, 0.9);
-    let art_h = if show_art {
+    let stacked_art_h = if show_art {
         ((area.height as f32 * size) as u16).min(area.height.saturating_sub(info_h + 2)).min(area.width / 2)
     } else {
         0
     };
+
+    // Wide or short terminals put the artwork beside the text instead, where it can use the
+    // full height; stacked, it would be squeezed to a sliver or dropped.
+    let wide = area.width > area.height * 4 && !compact;
+    let side_by_side = show_art && area.width >= 40 && (wide || stacked_art_h < 4);
+    if side_by_side {
+        let margin = u16::from(area.height >= 10);
+        let art_h = area.height - margin * 2;
+        let art_w = (art_h * 2).min(area.width * 2 / 5);
+        let [_, art_col, _, info_col, _] = Layout::horizontal([
+            Constraint::Fill(1),
+            Constraint::Length(art_w),
+            Constraint::Length(3),
+            Constraint::Length(area.width.saturating_sub(art_w + 7).min(60)),
+            Constraint::Fill(1),
+        ])
+        .areas(area);
+        draw_art(f, app, art_col.inner(Margin::new(0, margin)));
+        let [info] = Layout::vertical([Constraint::Length(info_h)]).flex(Flex::Center).areas(info_col);
+        draw_info(f, p, info, pal, g, Alignment::Left, compact);
+        return;
+    }
+
+    let art_h = stacked_art_h;
     let gap = u16::from(art_h > 0) * 2;
     let [_, art, _, info, _] = Layout::vertical([
         Constraint::Fill(1),
@@ -506,6 +512,8 @@ mod tests {
     use ratatui::crossterm::event::{Event as TermEvent, KeyCode, KeyEvent, KeyModifiers};
     use ratatui::{Terminal, backend::TestBackend};
 
+    use ratatui::style::Color;
+
     use crate::app::{App, Event};
     use crate::mpris::{Caps, Player, Status, Update};
 
@@ -603,6 +611,49 @@ mod tests {
             if std::env::var_os("SHOW").is_some() {
                 println!("{}", term.backend());
             }
+        }
+    }
+
+    #[tokio::test]
+    /// Short terminals keep the artwork too, beside the text instead of above it.
+    async fn short_terminal_shows_artwork() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, mut rrx) = tokio::sync::mpsc::unbounded_channel();
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let mut app = App::new(crate::config::Config::default(), None, None, tx, picker, rtx);
+        app.handle(Event::Player(Update::Changed(Player {
+            bus: "b".into(),
+            identity: "Test".into(),
+            status: Status::Playing,
+            title: "Song".into(),
+            artists: vec!["Artist".into()],
+            album: "Album".into(),
+            art_url: Some("x".into()),
+            length: Some(Duration::from_secs(200)),
+            position: Duration::from_secs(50),
+            position_at: Instant::now(),
+            rate: 1.0,
+            caps: Caps { control: true, play: true, pause: true, next: true, prev: true, seek: true },
+        })));
+        let img =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(512, 512, image::Rgb([200, 50, 90])));
+        app.handle(Event::Art { url: "x".into(), img: Some(img), accent: None });
+        app.handle(Event::Spectrum(vec![1.0; 48]));
+        for (w, h) in [(55, 11), (55, 9), (65, 10), (55, 7), (100, 40)] {
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| super::draw(f, &mut app)).unwrap();
+            while let Ok(req) = rrx.try_recv() {
+                app.handle(Event::Resized(req.resize_encode().unwrap()));
+            }
+            term.draw(|f| super::draw(f, &mut app)).unwrap();
+            let painted = term
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .filter(|c| c.bg == Color::Rgb(200, 50, 90) || c.fg == Color::Rgb(200, 50, 90))
+                .count();
+            assert!(painted >= 20, "artwork missing at {w}x{h} ({painted} cells)");
         }
     }
 
