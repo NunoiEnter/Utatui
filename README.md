@@ -48,6 +48,24 @@ draws a real-time spectrum from your system audio through [cava](https://github.
 
 ## Installation
 
+### Quick install (any distro)
+
+Static binaries for x86_64 and aarch64 run on every Linux distribution — Arch, Debian,
+Ubuntu, Fedora, openSUSE, Void, Alpine and more — with no runtime dependencies:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/NunoiEnter/Utatui/main/install.sh | sh
+```
+
+This installs `utatui` to `~/.local/bin` after verifying its SHA-256 checksum. Set
+`UTATUI_INSTALL_DIR` to change the location or `UTATUI_VERSION` to pin a release. You can
+also download an archive by hand from the [releases page](https://github.com/NunoiEnter/Utatui/releases).
+
+Then install cava for the visualizer, for example `sudo pacman -S cava`,
+`sudo apt install cava` or `sudo dnf install cava`.
+
+To uninstall, delete the binary: `rm ~/.local/bin/utatui`.
+
 ### Nix (flake)
 
 Run it once without installing:
