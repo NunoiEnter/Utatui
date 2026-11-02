@@ -94,8 +94,12 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
     draw_footer(f, app, footer, &pal, g);
 
-    // The visualizer only gets rows when there's room for the essentials above it.
-    let viz_h = app.cfg.visualizer.height.min(body.height.saturating_sub(10) / 2);
+    // Share the height between the visualizer and the player, always keeping room for the
+    // compact info block so short terminals still get both.
+    let viz_h = (body.height.saturating_sub(10) / 2)
+        .max(body.height / 3)
+        .min(app.cfg.visualizer.height)
+        .min(body.height.saturating_sub(COMPACT_INFO_H));
     let [main, viz] = Layout::vertical([Constraint::Fill(1), Constraint::Length(viz_h)]).areas(body);
     if viz_h > 0 && app.cfg.visualizer.enabled {
         let gradient = gradient(&app.cfg.visualizer.colors, pal.accent);
@@ -163,6 +167,8 @@ fn draw_empty(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
 
 /// Rows used by the text block: title, artist, album, gap, progress, gap, controls.
 const INFO_H: u16 = 7;
+/// Rows used on short terminals: title, artist, progress, controls.
+const COMPACT_INFO_H: u16 = 4;
 
 fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette, g: &Glyphs) {
     let landscape = area.width > area.height * 4 && area.height >= INFO_H;
@@ -182,13 +188,15 @@ fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palet
         .areas(area);
         draw_art(f, app, art_col.inner(Margin::new(0, 1)));
         let [info] = Layout::vertical([Constraint::Length(INFO_H)]).flex(Flex::Center).areas(info_col);
-        draw_info(f, p, info, pal, g, Alignment::Left);
+        draw_info(f, p, info, pal, g, Alignment::Left, false);
         return;
     }
 
+    let compact = area.height < INFO_H;
+    let info_h = if compact { COMPACT_INFO_H } else { INFO_H };
     let size = app.cfg.artwork.size.clamp(0.1, 0.9);
     let art_h = if show_art {
-        ((area.height as f32 * size) as u16).min(area.height.saturating_sub(INFO_H + 2)).min(area.width / 2)
+        ((area.height as f32 * size) as u16).min(area.height.saturating_sub(info_h + 2)).min(area.width / 2)
     } else {
         0
     };
@@ -197,7 +205,7 @@ fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palet
         Constraint::Fill(1),
         Constraint::Length(art_h),
         Constraint::Length(gap),
-        Constraint::Length(INFO_H),
+        Constraint::Length(info_h),
         Constraint::Fill(1),
     ])
     .areas(area);
@@ -206,7 +214,7 @@ fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palet
     }
     let w = info.width.min(64);
     let info = Rect { x: info.x + (info.width - w) / 2, width: w, ..info };
-    draw_info(f, p, info, pal, g, Alignment::Center);
+    draw_info(f, p, info, pal, g, Alignment::Center, compact);
 }
 
 /// Renders the artwork centered in `area`, keeping its aspect ratio.
@@ -222,7 +230,16 @@ fn draw_art(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(StatefulImage::default(), rect, art);
 }
 
-fn draw_info(f: &mut Frame, p: &Player, area: Rect, pal: &Palette, g: &Glyphs, align: Alignment) {
+/// Draws title, artist, progress and controls; `compact` drops the album and spacer rows.
+fn draw_info(
+    f: &mut Frame,
+    p: &Player,
+    area: Rect,
+    pal: &Palette,
+    g: &Glyphs,
+    align: Alignment,
+    compact: bool,
+) {
     let w = area.width as usize;
     let title = if p.title.is_empty() { "Unknown title" } else { &p.title };
     let pos = p.position_now();
@@ -230,9 +247,11 @@ fn draw_info(f: &mut Frame, p: &Player, area: Rect, pal: &Palette, g: &Glyphs, a
     let mut lines = vec![
         Line::styled(fit(title, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD)),
         Line::styled(fit(&p.artists.join(", "), w), Style::new().fg(pal.accent)),
-        Line::styled(fit(&p.album, w), Style::new().fg(pal.dim)),
-        Line::raw(""),
     ];
+    if !compact {
+        lines.push(Line::styled(fit(&p.album, w), Style::new().fg(pal.dim)));
+        lines.push(Line::raw(""));
+    }
 
     match p.length {
         // "1:23 ━━━━●──── 3:45"
@@ -260,7 +279,9 @@ fn draw_info(f: &mut Frame, p: &Player, area: Rect, pal: &Palette, g: &Glyphs, a
             Style::new().fg(pal.dim).add_modifier(Modifier::ITALIC),
         )),
     }
-    lines.push(Line::raw(""));
+    if !compact {
+        lines.push(Line::raw(""));
+    }
 
     let c = p.caps;
     let on = |enabled: bool, s: Style| {
@@ -549,6 +570,40 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
         term.draw(|f| super::draw(f, &mut app)).unwrap();
         assert!(text(&term).contains("doesn't share track progress"));
+    }
+
+    /// Short terminals keep both the visualizer and the essential info.
+    #[tokio::test]
+    async fn short_terminal_shows_visualizer() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, _rrx) = tokio::sync::mpsc::unbounded_channel();
+        let picker = ratatui_image::picker::Picker::halfblocks();
+        let mut app = App::new(crate::config::Config::default(), None, None, tx, picker, rtx);
+        app.handle(Event::Player(Update::Changed(Player {
+            bus: "org.mpris.MediaPlayer2.test".into(),
+            identity: "Test".into(),
+            status: Status::Playing,
+            title: "Song".into(),
+            artists: vec!["Artist".into()],
+            album: "Album".into(),
+            art_url: None,
+            length: Some(Duration::from_secs(200)),
+            position: Duration::from_secs(50),
+            position_at: Instant::now(),
+            rate: 1.0,
+            caps: Caps { control: true, play: true, pause: true, next: true, prev: true, seek: true },
+        })));
+        app.handle(Event::Spectrum(vec![1.0; 48]));
+        for (w, h) in [(65, 10), (65, 8), (40, 6)] {
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            term.draw(|f| super::draw(f, &mut app)).unwrap();
+            let screen = text(&term);
+            assert!(screen.contains('█'), "no visualizer at {w}x{h}");
+            assert!(screen.contains("Song") && screen.contains("3:20"), "info missing at {w}x{h}");
+            if std::env::var_os("SHOW").is_some() {
+                println!("{}", term.backend());
+            }
+        }
     }
 
     #[test]
