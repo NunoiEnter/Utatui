@@ -38,9 +38,9 @@ jobs:
           cp -r packaging/aur/utatui-git /home/builder/pkg
           # Build the commit under test instead of upstream main.
           sed -i "s|git+https://github.com/NunoiEnter/Utatui.git|git+file://$GITHUB_WORKSPACE|" /home/builder/pkg/PKGBUILD
-          git config --global --add safe.directory '*'
-          cp /root/.gitconfig /home/builder/.gitconfig
           chown -R builder /home/builder
+          # The checkout belongs to another user; let makepkg's git clone it.
+          su builder -c "git config --global --add safe.directory '*'"
           su builder -c 'cd ~/pkg && makepkg --noconfirm && makepkg --printsrcinfo > .SRCINFO'
           pacman -U --noconfirm /home/builder/pkg/*.pkg.tar.zst
           utatui --version
