@@ -65,11 +65,22 @@ pub enum ArtPosition {
     Side,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ArtShape {
+    /// Keep the image's own proportions.
+    #[default]
+    Original,
+    /// Crop the center to a square, like an album cover.
+    Square,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Artwork {
     pub show: bool,
     pub position: ArtPosition,
+    pub shape: ArtShape,
     /// Fraction of the terminal height the artwork may occupy (0.1 – 0.9).
     pub size: f32,
     /// Graphics protocol: "auto" (query the terminal), "kitty", "sixel", "iterm2" or
@@ -190,14 +201,20 @@ impl Default for LayoutCfg {
             show_album: true,
             show_controls: true,
             scroll_title: true,
-            remaining_time: false,
+            remaining_time: true,
         }
     }
 }
 
 impl Default for Artwork {
     fn default() -> Self {
-        Self { show: true, position: ArtPosition::Auto, size: 0.5, protocol: "auto".into() }
+        Self {
+            show: true,
+            position: ArtPosition::Auto,
+            shape: ArtShape::Original,
+            size: 0.5,
+            protocol: "auto".into(),
+        }
     }
 }
 

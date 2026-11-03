@@ -29,12 +29,14 @@ show_controls = true
 # Scroll titles that are too long to fit instead of cutting them off.
 scroll_title = true
 # Show time remaining (-1:23) instead of the track length.
-remaining_time = false
+remaining_time = true
 
 [artwork]
 show = true
 # auto | top | side. "auto" puts it above the text when there is room, beside it otherwise.
 position = "auto"
+# original | square. "square" crops wide video thumbnails to an album-style square.
+shape = "original"
 # Fraction of the terminal height the artwork may use (0.1 - 0.9).
 size = 0.5
 # "auto" asks the terminal; or force "kitty", "sixel", "iterm2", "halfblocks".

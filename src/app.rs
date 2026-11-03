@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use zbus::Connection;
 
 use crate::config::settings::{self, Effect, Field};
-use crate::config::{Config, KeyAction, Mode};
+use crate::config::{ArtShape, Config, KeyAction, Mode};
 use crate::mpris::{self, Action, Player, Status, Update};
 use crate::{media, visualizer};
 
@@ -58,6 +58,8 @@ pub struct App {
     pinned: bool,
     art_url: Option<String>,
     pub art: Option<ThreadProtocol>,
+    /// The decoded artwork, kept so a shape change can re-crop it without reloading.
+    art_image: Option<DynamicImage>,
     pub art_accent: Option<Color>,
     picker: Picker,
     resize_tx: UnboundedSender<ResizeRequest>,
@@ -94,6 +96,7 @@ impl App {
             pinned: false,
             art_url: None,
             art: None,
+            art_image: None,
             art_accent: None,
             picker,
             resize_tx,
@@ -195,9 +198,8 @@ impl App {
             Event::Art { url, img, accent } => {
                 if self.art_url.as_deref() == Some(url.as_str()) {
                     self.art_accent = accent;
-                    self.art = img.map(|i| {
-                        ThreadProtocol::new(self.resize_tx.clone(), Some(self.picker.new_resize_protocol(i)))
-                    });
+                    self.art_image = img;
+                    self.rebuild_art();
                 }
             }
             Event::Resized(r) => {
@@ -273,11 +275,26 @@ impl App {
             return;
         }
         self.art = None;
+        self.art_image = None;
         self.art_accent = None;
         self.art_url.clone_from(&url);
         if let Some(url) = url {
             media::load_art(url, self.tx.clone());
         }
+    }
+
+    /// Prepares the decoded artwork for display, applying the configured shape.
+    fn rebuild_art(&mut self) {
+        self.art = self.art_image.as_ref().map(|img| {
+            let img = match self.cfg.artwork.shape {
+                ArtShape::Original => img.clone(),
+                ArtShape::Square => {
+                    let side = img.width().min(img.height());
+                    img.crop_imm((img.width() - side) / 2, (img.height() - side) / 2, side, side)
+                }
+            };
+            ThreadProtocol::new(self.resize_tx.clone(), Some(self.picker.new_resize_protocol(img)))
+        });
     }
 
     fn select(&mut self, bus: String) {
@@ -418,8 +435,10 @@ impl App {
             Effect::RestartVisualizer => self.viz_restart_at = Some(Instant::now()),
             Effect::NextLaunch => self.set_status("applies next time UtaTUI starts"),
         }
-        if field == Field::ArtShow {
-            self.sync_art();
+        match field {
+            Field::ArtShow => self.sync_art(),
+            Field::ArtShape => self.rebuild_art(),
+            _ => {}
         }
     }
 
@@ -431,6 +450,7 @@ impl App {
                 self.dirty = false;
                 self.restart_visualizer();
                 self.sync_art();
+                self.rebuild_art();
                 self.set_status("reverted to saved settings");
             }
             Err(e) => self.set_status(e),

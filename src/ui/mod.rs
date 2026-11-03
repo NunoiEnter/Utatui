@@ -242,8 +242,10 @@ fn draw_mini(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette
     if need(6, 3) && !p.artists.is_empty() {
         lines.push(Line::styled(fit(&p.artists.join(", "), w), Style::new().fg(pal.accent)));
     }
-    if need(4, 2) {
-        lines.push(progress_line(app, p, w, pal, g));
+    if need(4, 2)
+        && let Some(progress) = progress_line(app, p, w, pal, g)
+    {
+        lines.push(progress);
     }
     if need(7, 4) && app.cfg.layout.show_controls {
         lines.push(controls_line(p, pal, g));
@@ -254,7 +256,8 @@ fn draw_mini(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette
     draw_spectrum(f, app, viz, pal);
 }
 
-/// Regular terminals: the centered, artwork-first composition with the visualizer below.
+/// Regular terminals: a large centered cover with a card below it holding title, artist,
+/// progress and controls, and the visualizer along the bottom.
 fn draw_full(f: &mut Frame, app: &mut App, p: &Player, body: Rect, pal: &Palette, g: &Glyphs) {
     let viz_h = if app.cfg.visualizer.enabled {
         (body.height.saturating_sub(10) / 2).max(body.height / 3).min(app.cfg.visualizer.height)
@@ -264,77 +267,121 @@ fn draw_full(f: &mut Frame, app: &mut App, p: &Player, body: Rect, pal: &Palette
     let [main, viz] = Layout::vertical([Constraint::Fill(1), Constraint::Length(viz_h)]).areas(body);
     draw_spectrum(f, app, viz.inner(Margin::new(viz.width.min(4), 0)), pal);
 
-    let layout = &app.cfg.layout;
-    let full_h = 4 + u16::from(layout.show_album) + 2 * u16::from(layout.show_controls);
-    let compact = main.height < full_h;
-    let info_h = if compact { 3 + u16::from(layout.show_controls) } else { full_h };
+    let card_w = main.width.min(72);
+    let card_lines = info_lines(app, p, (card_w as usize).saturating_sub(6), pal, g, false).len() as u16;
+    let card_h = card_lines + 2;
     let show_art = app.cfg.artwork.show && app.art.is_some();
 
+    // Largest cover the size setting allows that still leaves room for the card.
     let size = app.cfg.artwork.size.clamp(0.1, 0.9);
-    let stacked_art_h = if show_art {
-        ((main.height as f32 * size) as u16).min(main.height.saturating_sub(info_h + 2)).min(main.width / 2)
-    } else {
-        0
-    };
+    let max_art_h = ((main.height as f32 * size) as u16).min(main.height.saturating_sub(card_h + 1));
+    let art_size =
+        if show_art { art_size(app, Size::new(main.width * 9 / 10, max_art_h)) } else { Size::ZERO };
+
     let side_by_side = show_art
         && match app.cfg.artwork.position {
             ArtPosition::Side => true,
             ArtPosition::Top => false,
             // Stacked, the cover would be squeezed to a sliver; beside the text it gets the height.
-            ArtPosition::Auto => main.width > main.height * 4 || stacked_art_h < 4,
+            ArtPosition::Auto => main.width > main.height * 4 || art_size.height < 4,
         };
-
     if side_by_side {
-        let margin = u16::from(main.height >= 10);
-        let art_h = main.height - margin * 2;
-        let art_w = (art_h * 2).min(main.width * 2 / 5);
-        let [_, art_col, _, info_col, _] = Layout::horizontal([
-            Constraint::Fill(1),
-            Constraint::Length(art_w),
-            Constraint::Length(3),
-            Constraint::Length(main.width.saturating_sub(art_w + 7).min(60)),
-            Constraint::Fill(1),
-        ])
-        .areas(main);
-        draw_art(f, app, art_col.inner(Margin::new(0, margin)));
-        let [info] = Layout::vertical([Constraint::Length(info_h)]).flex(Flex::Center).areas(info_col);
-        draw_info(f, app, p, info, pal, g, Alignment::Left, compact);
+        draw_side_by_side(f, app, p, main, pal, g);
+        return;
+    }
+    if main.height < card_h {
+        // Not even room for the card: plain compact text, centered.
+        let lines = info_lines(app, p, main.width.min(64) as usize, pal, g, true);
+        let [info] =
+            Layout::vertical([Constraint::Length(lines.len() as u16)]).flex(Flex::Center).areas(main);
+        f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), info);
         return;
     }
 
-    let art_h = stacked_art_h;
-    let gap = u16::from(art_h > 0) * 2;
-    let [_, art, _, info, _] = Layout::vertical([
+    let gap = u16::from(art_size.height > 0);
+    let group_h = art_size.height + gap + card_h;
+    let top = main.y + main.height.saturating_sub(group_h) / 2;
+    if art_size.height > 0 {
+        let art = Rect {
+            x: main.x + (main.width - art_size.width) / 2,
+            y: top,
+            width: art_size.width,
+            height: art_size.height,
+        };
+        draw_art(f, app, art);
+    }
+    // The card is a little wider than the cover, like a Now Playing widget.
+    let card_w = (art_size.width + 8).clamp(40, 72).min(main.width);
+    let card = Rect {
+        x: main.x + (main.width - card_w) / 2,
+        y: top + art_size.height + gap,
+        width: card_w,
+        height: card_h,
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(pal.dim))
+        .padding(Padding::horizontal(2));
+    let inner = block.inner(card);
+    f.render_widget(block, card);
+    let lines = info_lines(app, p, inner.width as usize, pal, g, false);
+    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
+}
+
+/// Wide or short terminals: cover on the left at full height, text on the right.
+fn draw_side_by_side(f: &mut Frame, app: &mut App, p: &Player, main: Rect, pal: &Palette, g: &Glyphs) {
+    let margin = u16::from(main.height >= 10);
+    let art_h = main.height - margin * 2;
+    let art_size = art_size(app, Size::new(main.width * 2 / 5, art_h));
+    let text_w = main.width.saturating_sub(art_size.width + 7).min(60);
+    let [_, art_col, _, info_col, _] = Layout::horizontal([
         Constraint::Fill(1),
-        Constraint::Length(art_h),
-        Constraint::Length(gap),
-        Constraint::Length(info_h),
+        Constraint::Length(art_size.width),
+        Constraint::Length(3),
+        Constraint::Length(text_w),
         Constraint::Fill(1),
     ])
     .areas(main);
-    if art_h > 0 {
-        draw_art(f, app, art);
+    let [art] = Layout::vertical([Constraint::Length(art_size.height)]).flex(Flex::Center).areas(art_col);
+    draw_art(f, app, art);
+    let full = info_lines(app, p, text_w as usize, pal, g, false);
+    let lines = if (full.len() as u16) <= main.height {
+        full
+    } else {
+        info_lines(app, p, text_w as usize, pal, g, true)
+    };
+    let [info] =
+        Layout::vertical([Constraint::Length(lines.len() as u16)]).flex(Flex::Center).areas(info_col);
+    f.render_widget(Paragraph::new(lines), info);
+}
+
+/// Artwork is scaled up as well as down, so the size setting works for small thumbnails too.
+const ART_RESIZE: Resize = Resize::Scale(Some(ratatui_image::FilterType::CatmullRom));
+
+/// Cell size the artwork takes when scaled into `available`, keeping its aspect ratio.
+fn art_size(app: &App, available: Size) -> Size {
+    if available.width == 0 || available.height == 0 {
+        return Size::ZERO;
     }
-    let w = info.width.min(64);
-    let info = Rect { x: info.x + (info.width - w) / 2, width: w, ..info };
-    draw_info(f, app, p, info, pal, g, Alignment::Center, compact);
+    app.art.as_ref().and_then(|art| art.size_for(ART_RESIZE, available)).unwrap_or(Size::ZERO)
 }
 
 /// Renders the artwork centered in `area`, keeping its aspect ratio.
 fn draw_art(f: &mut Frame, app: &mut App, area: Rect) {
+    let size = art_size(app, area.as_size());
     let Some(art) = app.art.as_mut() else { return };
-    let size = art.size_for(Resize::Fit(None), Size::new(area.width, area.height)).unwrap_or(area.as_size());
     let rect = Rect {
         x: area.x + area.width.saturating_sub(size.width) / 2,
         y: area.y + area.height.saturating_sub(size.height) / 2,
         width: size.width.min(area.width),
         height: size.height.min(area.height),
     };
-    f.render_stateful_widget(StatefulImage::default(), rect, art);
+    f.render_stateful_widget(StatefulImage::default().resize(ART_RESIZE), rect, art);
 }
 
-/// "1:23 ━━━━●──── 3:45", shrinking to just the bar on narrow widths.
-fn progress_line(app: &App, p: &Player, w: usize, pal: &Palette, g: &Glyphs) -> Line<'static> {
+/// "1:23 ━━━━●──── -2:55", shrinking to just the bar on narrow widths. `None` when the player
+/// reports no progress at all (common for browser tabs), so nothing is made up.
+fn progress_line(app: &App, p: &Player, w: usize, pal: &Palette, g: &Glyphs) -> Option<Line<'static>> {
     let pos = p.position_now();
     match p.length {
         Some(len) => {
@@ -357,18 +404,14 @@ fn progress_line(app: &App, p: &Player, w: usize, pal: &Palette, g: &Glyphs) -> 
                 spans.insert(0, Span::styled(format!("{l} "), Style::new().fg(pal.dim)));
                 spans.push(Span::styled(format!(" {r}"), Style::new().fg(pal.dim)));
             }
-            Line::from(spans)
+            Some(Line::from(spans))
         }
         // Length unknown but the player does report position (e.g. a stream): elapsed only.
-        None if !p.position.is_zero() => Line::from(vec![
+        None if !p.position.is_zero() => Some(Line::from(vec![
             Span::styled(fmt_time(pos), Style::new().fg(pal.fg)),
             Span::styled(format!(" {} live", g.dot), Style::new().fg(pal.dim)),
-        ]),
-        // Neither: the player (often a browser tab) exposes no progress; don't invent one.
-        None => Line::styled(
-            fit(&format!("{} doesn't share track progress", p.identity), w),
-            Style::new().fg(pal.dim).add_modifier(Modifier::ITALIC),
-        ),
+        ])),
+        None => None,
     }
 }
 
@@ -388,37 +431,36 @@ fn controls_line(p: &Player, pal: &Palette, g: &Glyphs) -> Line<'static> {
 }
 
 /// Title, artist, album, progress and controls; `compact` drops the album and spacer rows.
-#[allow(clippy::too_many_arguments)]
-fn draw_info(
-    f: &mut Frame,
+fn info_lines(
     app: &App,
     p: &Player,
-    area: Rect,
+    w: usize,
     pal: &Palette,
     g: &Glyphs,
-    align: Alignment,
     compact: bool,
-) {
-    let w = area.width as usize;
+) -> Vec<Line<'static>> {
     let layout = &app.cfg.layout;
-    let mut lines = vec![
-        Line::styled(title_text(app, p, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD)),
-        Line::styled(fit(&p.artists.join(", "), w), Style::new().fg(pal.accent)),
-    ];
-    if !compact {
-        if layout.show_album {
-            lines.push(Line::styled(fit(&p.album, w), Style::new().fg(pal.dim)));
-        }
-        lines.push(Line::raw(""));
+    let mut lines =
+        vec![Line::styled(title_text(app, p, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD))];
+    if !p.artists.is_empty() {
+        lines.push(Line::styled(fit(&p.artists.join(", "), w), Style::new().fg(pal.accent)));
     }
-    lines.push(progress_line(app, p, w, pal, g));
+    if !compact && layout.show_album && !p.album.is_empty() {
+        lines.push(Line::styled(fit(&p.album, w), Style::new().fg(pal.dim)));
+    }
+    if let Some(progress) = progress_line(app, p, w, pal, g) {
+        if !compact {
+            lines.push(Line::raw(""));
+        }
+        lines.push(progress);
+    }
     if layout.show_controls {
         if !compact {
             lines.push(Line::raw(""));
         }
         lines.push(controls_line(p, pal, g));
     }
-    f.render_widget(Paragraph::new(lines).alignment(align), area);
+    lines
 }
 
 fn status_label(s: Status) -> &'static str {
@@ -748,7 +790,7 @@ mod tests {
 
         let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
         term.draw(|f| super::draw(f, &mut app)).unwrap();
-        assert!(text(&term).contains("Artist") && text(&term).contains("3:20"));
+        assert!(text(&term).contains("Artist") && text(&term).contains("-2:"));
 
         // Settings drawer opens, edits live, and every size still renders.
         key(&mut app, KeyCode::Char('o'));
@@ -767,13 +809,14 @@ mod tests {
         }
         key(&mut app, KeyCode::Esc);
 
-        // No length and no position: say so instead of showing a timer.
+        // No length and no position: the progress row is left out rather than invented.
         player.length = None;
         player.position = Duration::ZERO;
         app.handle(Event::Player(Update::Changed(player)));
         let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
         term.draw(|f| super::draw(f, &mut app)).unwrap();
-        assert!(text(&term).contains("doesn't share track progress"));
+        let screen = text(&term);
+        assert!(screen.contains("Artist") && !screen.contains("0:00") && !screen.contains('━'));
     }
 
     /// App with a playing track, loaded artwork and a full-scale spectrum.
@@ -783,6 +826,7 @@ mod tests {
         let picker = ratatui_image::picker::Picker::halfblocks();
         let mut cfg = crate::config::Config::default();
         cfg.visualizer.cava_path = "/nonexistent/cava".into();
+        cfg.layout.scroll_title = false; // keep the title still; marquee has its own test
         let mut app = App::new(cfg, None, None, tx, picker, rtx);
         app.handle(Event::Player(Update::Changed(Player {
             bus: "b".into(),
@@ -852,6 +896,21 @@ mod tests {
         }
     }
 
+    /// The size setting changes the drawn cover, even for a thumbnail smaller than the screen.
+    #[tokio::test]
+    async fn artwork_size_setting_scales_small_thumbnails() {
+        let (mut app, mut rrx) = app_with_art();
+        let thumb =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(64, 36, image::Rgb([200, 50, 90])));
+        app.handle(Event::Art { url: "x".into(), img: Some(thumb), accent: None });
+        let mut cells = Vec::new();
+        for size in [0.2, 0.5, 0.8] {
+            app.cfg.artwork.size = size;
+            cells.push(art_cells(&render(&mut app, &mut rrx, 120, 50)));
+        }
+        assert!(cells[0] < cells[1] && cells[1] < cells[2], "artwork did not grow with size: {cells:?}");
+    }
+
     /// The settings page stays usable on small terminals: tabs, options and navigation.
     #[tokio::test]
     async fn settings_page_on_small_terminals() {
@@ -869,7 +928,9 @@ mod tests {
         assert!(app.cfg.layout.show_footer);
 
         key(&mut app, KeyCode::Char('3')); // Artwork tab by number
-        key(&mut app, KeyCode::Down); // Position
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Down); // Show artwork -> Size -> Shape -> Position
+        }
         let term = render(&mut app, &mut rrx, 80, 24);
         let screen = text(&term);
         assert!(screen.contains("Position") && screen.contains("auto: above"), "{}", term.backend());

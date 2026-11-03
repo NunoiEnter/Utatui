@@ -96,6 +96,7 @@ pub enum Field {
     RemainingTime,
     ArtShow,
     ArtPosition,
+    ArtShape,
     ArtSize,
     ArtProtocol,
     VizEnabled,
@@ -117,17 +118,17 @@ pub enum Field {
 }
 
 use Field::{
-    Accent, AccentFromArt, ArtPosition, ArtProtocol, ArtShow, ArtSize, Ascii, Background, Dim, FollowPlaying,
-    Foreground, PreferredPlayer, RemainingTime, ScrollTitle, SeekStep, ShowAlbum, ShowControls, ShowFooter,
-    ThemePreset, VizBarWidth, VizBars, VizBaseline, VizColors, VizEnabled, VizFramerate, VizGradient,
-    VizHeight, VizMode, VizSensitivity, VizSmoothing, VizSpacing,
+    Accent, AccentFromArt, ArtPosition, ArtProtocol, ArtShape, ArtShow, ArtSize, Ascii, Background, Dim,
+    FollowPlaying, Foreground, PreferredPlayer, RemainingTime, ScrollTitle, SeekStep, ShowAlbum,
+    ShowControls, ShowFooter, ThemePreset, VizBarWidth, VizBars, VizBaseline, VizColors, VizEnabled,
+    VizFramerate, VizGradient, VizHeight, VizMode, VizSensitivity, VizSmoothing, VizSpacing,
 };
 
 /// Settings tabs, in display order.
 pub const TABS: &[(&str, &[Field])] = &[
     ("Theme", &[ThemePreset, AccentFromArt, Accent, Foreground, Dim, Background]),
     ("Layout", &[ShowFooter, ShowAlbum, ShowControls, ScrollTitle, RemainingTime]),
-    ("Artwork", &[ArtShow, ArtPosition, ArtSize, ArtProtocol]),
+    ("Artwork", &[ArtShow, ArtSize, ArtShape, ArtPosition, ArtProtocol]),
     (
         "Visualizer",
         &[
@@ -161,6 +162,7 @@ pub enum Effect {
 
 const PROTOCOLS: &[&str] = &["auto", "kitty", "sixel", "iterm2", "halfblocks"];
 const FRAMERATES: &[u32] = &[30, 60, 90, 120, 144];
+const SHAPES: [super::ArtShape; 2] = [super::ArtShape::Original, super::ArtShape::Square];
 const POSITIONS: [super::ArtPosition; 3] =
     [super::ArtPosition::Auto, super::ArtPosition::Top, super::ArtPosition::Side];
 
@@ -179,6 +181,7 @@ pub fn label(f: Field) -> &'static str {
         RemainingTime => "Time remaining",
         ArtShow => "Show artwork",
         ArtPosition => "Position",
+        ArtShape => "Shape",
         ArtSize => "Size",
         ArtProtocol => "Protocol",
         VizEnabled => "Enabled",
@@ -217,6 +220,7 @@ pub fn help(f: Field) -> &'static str {
         ArtShow => "Show the album art or video thumbnail.",
         ArtPosition => "auto: above when there's room, beside otherwise. top / side: always.",
         ArtSize => "How much of the screen height the artwork may use.",
+        ArtShape => "original keeps the image's shape; square crops it like an album cover.",
         ArtProtocol => "Image method. Use halfblocks if images look wrong. Needs restart.",
         VizEnabled => "Show the audio visualizer (needs cava installed).",
         VizMode => "bars, mirror, wave, blocks or minimal. Also cycle with v.",
@@ -272,6 +276,7 @@ pub fn value(c: &Config, f: Field) -> String {
         RemainingTime => on_off(l.remaining_time),
         ArtShow => on_off(a.show),
         ArtPosition => format!("{:?}", a.position).to_lowercase(),
+        ArtShape => format!("{:?}", a.shape).to_lowercase(),
         ArtSize => format!("{:.0}%", a.size * 100.0),
         ArtProtocol => a.protocol.clone(),
         VizEnabled => on_off(v.enabled),
@@ -371,6 +376,7 @@ pub fn adjust(c: &mut Config, f: Field, dir: i32) -> Effect {
         RemainingTime => flip(&mut l.remaining_time),
         ArtShow => flip(&mut a.show),
         ArtPosition => a.position = cycle(&POSITIONS, a.position, dir),
+        ArtShape => a.shape = cycle(&SHAPES, a.shape, dir),
         ArtSize => a.size = (step(a.size, dir, 0.05, 0.15, 0.9) * 100.0).round() / 100.0,
         ArtProtocol => a.protocol = cycle(PROTOCOLS, a.protocol.as_str(), dir).into(),
         VizEnabled => flip(&mut v.enabled),
@@ -422,6 +428,7 @@ pub fn reset(c: &mut Config, f: Field) -> Effect {
         RemainingTime => c.layout.remaining_time = d.layout.remaining_time,
         ArtShow => c.artwork.show = d.artwork.show,
         ArtPosition => c.artwork.position = d.artwork.position,
+        ArtShape => c.artwork.shape = d.artwork.shape,
         ArtSize => c.artwork.size = d.artwork.size,
         ArtProtocol => c.artwork.protocol = d.artwork.protocol,
         VizEnabled => c.visualizer.enabled = d.visualizer.enabled,
@@ -529,7 +536,7 @@ mod tests {
 
         // Every field has a label and help text, and appears in exactly one tab.
         let fields: Vec<Field> = TABS.iter().flat_map(|(_, f)| f.iter().copied()).collect();
-        assert_eq!(fields.len(), 31);
+        assert_eq!(fields.len(), 32);
         for f in &fields {
             assert!(!label(*f).is_empty() && !help(*f).is_empty());
             assert_eq!(fields.iter().filter(|g| g == &f).count(), 1);

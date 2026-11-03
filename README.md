@@ -176,7 +176,8 @@ Sections:
 
 - **Theme** — preset, accent from artwork, accent, text, muted text, background
 - **Layout** — status bar, album line, controls, scrolling long titles, time remaining
-- **Artwork** — show/hide, position (auto, top, side), size, graphics protocol
+- **Artwork** — show/hide, size, shape (original or square crop), position (auto, top, side),
+  graphics protocol
 - **Visualizer** — on/off, style, gradient, custom colors, height, bar count, bar width,
   spacing, silence baseline, sensitivity, frame rate, smoothing
 - **Player** — follow the playing player, preferred player, seek step
