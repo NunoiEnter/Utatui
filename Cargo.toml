@@ -12,17 +12,23 @@ keywords = ["tui", "mpris", "music", "ratatui", "visualizer"]
 categories = ["command-line-utilities", "multimedia::audio"]
 exclude = ["/.github", "/assets", "/flake.nix", "/flake.lock"]
 
+# Image scaling is slow unoptimized; optimize dependencies even in debug and test builds.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
-lto = "thin"
+lto = true
+codegen-units = 1
+panic = "abort"
 strip = true
 
 [dependencies]
 futures-util = { version = "0.3.34", default-features = false, features = ["alloc"] }
-image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "webp"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 ratatui = "0.30.2"
 ratatui-image = { version = "11.1.0", default-features = false, features = ["crossterm", "tokio"] }
 serde = { version = "1.0.229", features = ["derive"] }
-tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "sync", "process", "time", "io-util", "fs"] }
+tokio = { version = "1.54.1", features = ["rt", "macros", "sync", "process", "time", "io-util", "fs"] }
 toml = "1.1.8"
 unicode-width = "0.2.3"
 ureq = "3.5.0"

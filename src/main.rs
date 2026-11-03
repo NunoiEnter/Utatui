@@ -27,7 +27,8 @@ USAGE: utatui [--config <path>] [--list]
   --help           show this help
   --version        show version";
 
-#[tokio::main]
+// I/O-bound: one thread is plenty, and image work already runs on the blocking pool.
+#[tokio::main(flavor = "current_thread")]
 async fn main() {
     if let Err(e) = run().await {
         eprintln!("utatui: {e}");
