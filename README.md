@@ -15,11 +15,16 @@ artwork-first screen with a live audio visualizer.
 
 </div>
 
-<!-- Add a screenshot or GIF here, e.g. ![UtaTUI](assets/screenshot.png) -->
+<p align="center">
+  <img src="assets/screenshot-bars.png" alt="UtaTUI showing a large cover, a Now Playing card and the bars visualizer" width="520">
+</p>
 
-## SCREEBSHOTS
-
-![Uploading image.png…]()
+<table align="center">
+  <tr>
+    <td align="center"><img src="assets/screenshot-blocks.png" alt="The blocks visualizer style" width="360"><br><sub>Blocks visualizer style</sub></td>
+    <td align="center"><img src="assets/screenshot-compact.png" alt="A short terminal with a scrolling title" width="420"><br><sub>Short terminal, scrolling title</sub></td>
+  </tr>
+</table>
 
 UtaTUI is **not a music player**. It is a remote control and visual companion for the
 players you already use: it discovers them over D-Bus, shows what they are playing, and
