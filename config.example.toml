@@ -37,6 +37,9 @@ show = true
 position = "auto"
 # original | square. "square" crops wide video thumbnails to an album-style square.
 shape = "original"
+# Download full-resolution YouTube thumbnails (from i.ytimg.com) instead of the browser's
+# small preview.
+hd_thumbnails = true
 # Fraction of the terminal height the artwork may use (0.1 - 0.9).
 size = 0.6
 # "auto" asks the terminal; or force "kitty", "sixel", "iterm2", "halfblocks".

@@ -81,6 +81,8 @@ pub struct Artwork {
     pub show: bool,
     pub position: ArtPosition,
     pub shape: ArtShape,
+    /// Fetch full-resolution YouTube thumbnails instead of the browser's small preview.
+    pub hd_thumbnails: bool,
     /// Fraction of the terminal height the artwork may occupy (0.1 – 0.9).
     pub size: f32,
     /// Graphics protocol: "auto" (query the terminal), "kitty", "sixel", "iterm2" or
@@ -212,6 +214,7 @@ impl Default for Artwork {
             show: true,
             position: ArtPosition::Auto,
             shape: ArtShape::Original,
+            hd_thumbnails: true,
             size: 0.6,
             protocol: "auto".into(),
         }

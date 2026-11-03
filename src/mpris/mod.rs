@@ -50,6 +50,8 @@ pub struct Player {
     pub artists: Vec<String>,
     pub album: String,
     pub art_url: Option<String>,
+    /// Page the media plays on (`xesam:url`), e.g. a YouTube watch URL.
+    pub page_url: String,
     pub length: Option<Duration>,
     /// Position reported by the player at `position_at`; interpolated locally while playing.
     pub position: Duration,
@@ -238,6 +240,7 @@ async fn fetch(conn: &Connection, bus: &str) -> zbus::Result<Player> {
         album: Some(m_str("xesam:album"))
             .filter(|a| !a.is_empty())
             .unwrap_or_else(|| host(&m_str("xesam:url"))),
+        page_url: m_str("xesam:url"),
         art_url: meta.get("mpris:artUrl").and_then(|v| as_string(v)).filter(|s| !s.is_empty()),
         length: meta.get("mpris:length").and_then(|v| as_i64(v)).filter(|&l| l > 0).map(micros),
         position: p.get("Position").and_then(|v| as_i64(v)).map(micros).unwrap_or_default(),

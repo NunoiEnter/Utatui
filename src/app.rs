@@ -270,16 +270,23 @@ impl App {
     }
 
     fn sync_art(&mut self) {
-        let url = self.current().and_then(|p| p.art_url.clone()).filter(|_| self.cfg.artwork.show);
-        if url == self.art_url {
+        let mut sources = Vec::new();
+        if let Some(p) = self.current().filter(|_| self.cfg.artwork.show) {
+            if self.cfg.artwork.hd_thumbnails {
+                sources = media::youtube_thumbnails(&p.page_url);
+            }
+            sources.extend(p.art_url.clone());
+        }
+        let key = sources.first().cloned();
+        if key == self.art_url {
             return;
         }
         self.art = None;
         self.art_image = None;
         self.art_accent = None;
-        self.art_url.clone_from(&url);
-        if let Some(url) = url {
-            media::load_art(url, self.tx.clone());
+        self.art_url.clone_from(&key);
+        if let Some(key) = key {
+            media::load_art(key, sources, self.tx.clone());
         }
     }
 
@@ -436,7 +443,7 @@ impl App {
             Effect::NextLaunch => self.set_status("applies next time UtaTUI starts"),
         }
         match field {
-            Field::ArtShow => self.sync_art(),
+            Field::ArtShow | Field::ArtHd => self.sync_art(),
             Field::ArtShape => self.rebuild_art(),
             _ => {}
         }

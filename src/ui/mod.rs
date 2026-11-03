@@ -270,7 +270,7 @@ fn draw_full(f: &mut Frame, app: &mut App, p: &Player, body: Rect, pal: &Palette
     // Stacked: the cover takes its share of the screen, keeping a gap and one row of text.
     let stacked_h = ((body.height as f32 * share) as u16).min(main.height.saturating_sub(2));
     let stacked =
-        if show_art { art_size(app, Size::new(main.width * 9 / 10, stacked_h)) } else { Size::ZERO };
+        if show_art { art_size(app, Size::new(main.width.saturating_sub(4), stacked_h)) } else { Size::ZERO };
     // Side by side: the cover can use the full height of the player area.
     let beside_h = (main.height as f32 * (share * 2.0).min(1.0)) as u16;
     let beside = if show_art { art_size(app, Size::new(main.width * 2 / 5, beside_h)) } else { Size::ZERO };
@@ -638,27 +638,17 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
 /// Tab bar: every name when they fit, otherwise only the open tab with arrows.
 fn tabs_line(tab: usize, w: usize, pal: &Palette) -> Line<'static> {
     let names: Vec<String> = TABS.iter().enumerate().map(|(i, (n, _))| format!(" {} {n} ", i + 1)).collect();
-    if names.iter().map(|n| n.width()).sum::<usize>() <= w {
-        Line::from(
-            names
-                .iter()
-                .enumerate()
-                .map(|(i, n)| {
-                    if i == tab {
-                        Span::styled(
-                            n.clone(),
-                            Style::new().fg(pal.on_accent()).bg(pal.accent).add_modifier(Modifier::BOLD),
-                        )
-                    } else {
-                        Span::styled(n.clone(), Style::new().fg(pal.dim))
-                    }
-                })
-                .collect::<Vec<_>>(),
-        )
-    } else {
+    if names.iter().map(|n| n.width()).sum::<usize>() > w {
         let name = format!("‹ {} {}/{} ›", TABS[tab].0, tab + 1, TABS.len());
-        Line::styled(fit(&name, w), Style::new().fg(pal.accent).add_modifier(Modifier::BOLD))
+        return Line::styled(fit(&name, w), Style::new().fg(pal.accent).add_modifier(Modifier::BOLD));
     }
+    let open = Style::new().fg(pal.on_accent()).bg(pal.accent).add_modifier(Modifier::BOLD);
+    let closed = Style::new().fg(pal.dim);
+    names
+        .into_iter()
+        .enumerate()
+        .map(|(i, n)| Span::styled(n, if i == tab { open } else { closed }))
+        .collect()
 }
 
 /// One option row: label on the left, value (and color swatch) on the right.
@@ -812,6 +802,7 @@ mod tests {
             artists: vec!["Artist".into()],
             album: "Album".into(),
             art_url: None,
+            page_url: String::new(),
             length: Some(Duration::from_secs(200)),
             position: Duration::from_secs(50),
             position_at: Instant::now(),
@@ -869,6 +860,7 @@ mod tests {
             artists: vec!["Artist".into()],
             album: "youtube.com".into(),
             art_url: Some("x".into()),
+            page_url: String::new(),
             length: Some(Duration::from_secs(200)),
             position: Duration::from_secs(50),
             position_at: Instant::now(),
@@ -969,6 +961,30 @@ mod tests {
         }
     }
 
+    /// Sweeps terminal sizes from 1x1 to 240x80: the cover, the visualizer and the title must
+    /// all stay visible wherever there is room for them, and nothing may panic.
+    #[tokio::test]
+    async fn every_terminal_size() {
+        let (mut app, mut rrx) = app_with_art();
+        let mut failures = Vec::new();
+        for w in (1..=240).step_by(9).chain([26, 40, 41, 80, 106, 213]) {
+            for h in (1..=80).step_by(4).chain([5, 7, 8, 9, 14, 27, 56]) {
+                let term = render(&mut app, &mut rrx, w, h);
+                let screen = text(&term);
+                if w >= 6 && !screen.contains('█') {
+                    failures.push(format!("{w}x{h}: no visualizer"));
+                }
+                if w >= 10 && art_cells(&term) == 0 {
+                    failures.push(format!("{w}x{h}: no artwork"));
+                }
+                if w >= 6 && h >= 2 && !screen.contains("ロ") {
+                    failures.push(format!("{w}x{h}: no title"));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{} failures:\n{}", failures.len(), failures.join("\n"));
+    }
+
     /// Out-of-range config values must not crash the renderer.
     #[tokio::test]
     async fn extreme_config_values_render() {
@@ -1002,8 +1018,8 @@ mod tests {
         assert!(app.cfg.layout.show_footer);
 
         key(&mut app, KeyCode::Char('3')); // Artwork tab by number
-        for _ in 0..3 {
-            key(&mut app, KeyCode::Down); // Show artwork -> Size -> Shape -> Position
+        for _ in 0..4 {
+            key(&mut app, KeyCode::Down); // Show artwork -> Size -> Shape -> HD -> Position
         }
         let term = render(&mut app, &mut rrx, 80, 24);
         let screen = text(&term);

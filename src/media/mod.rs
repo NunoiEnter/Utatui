@@ -11,14 +11,35 @@ use crate::app::Event;
 /// Largest artwork download accepted; covers are normally well under 1 MiB.
 const MAX_ART_BYTES: u64 = 16 * 1024 * 1024;
 
-/// Loads `mpris:artUrl` (file://, http(s):// or a bare path) off the async runtime and
-/// reports back with `Event::Art`. `None` means the artwork could not be loaded.
-pub fn load_art(url: String, tx: UnboundedSender<Event>) {
+/// Loads artwork off the async runtime, trying `sources` (file://, http(s):// or bare paths)
+/// in order, and reports back with `Event::Art` tagged `key`. `img` is `None` if all fail.
+pub fn load_art(key: String, sources: Vec<String>, tx: UnboundedSender<Event>) {
     tokio::task::spawn_blocking(move || {
-        let img = read_bytes(&url).and_then(|b| image::load_from_memory(&b).map_err(|e| e.to_string())).ok();
+        let img = sources.iter().find_map(|src| image::load_from_memory(&read_bytes(src).ok()?).ok());
         let accent = img.as_ref().and_then(accent_color);
-        let _ = tx.send(Event::Art { url, img, accent });
+        let _ = tx.send(Event::Art { url: key, img, accent });
     });
+}
+
+/// Full-resolution thumbnails for a YouTube page, best first. Browsers only hand over a small
+/// (~336x188) preview, which looks blurry at full-screen sizes.
+pub fn youtube_thumbnails(page_url: &str) -> Vec<String> {
+    let rest = page_url.split_once("://").map_or(page_url, |(_, r)| r).trim_start_matches("www.");
+    let id = if let Some(q) =
+        rest.strip_prefix("youtube.com/watch?").or(rest.strip_prefix("music.youtube.com/watch?"))
+    {
+        q.split('&').find_map(|kv| kv.strip_prefix("v="))
+    } else {
+        rest.strip_prefix("youtu.be/").map(|r| r.split(['?', '&', '#']).next().unwrap_or(r))
+    };
+    // Video IDs are 11 URL-safe characters; anything else is not used to build a URL.
+    let valid =
+        |id: &&str| id.len() == 11 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_');
+    id.filter(valid)
+        .map(|id| {
+            ["maxresdefault", "sddefault"].map(|q| format!("https://i.ytimg.com/vi/{id}/{q}.jpg")).to_vec()
+        })
+        .unwrap_or_default()
 }
 
 /// Picks a vivid, readable accent from the artwork: the most colorful hue family,
@@ -124,6 +145,21 @@ mod tests {
         assert_eq!(percent_decode("/tmp/a%20b%2"), "/tmp/a b%2");
         assert_eq!(fmt_time(Duration::from_secs(75)), "1:15");
         assert_eq!(fmt_time(Duration::from_secs(3725)), "1:02:05");
+    }
+
+    #[test]
+    fn youtube_thumbnail_urls() {
+        let hd = "https://i.ytimg.com/vi/rfB0KS9HXg0/maxresdefault.jpg";
+        for url in [
+            "https://www.youtube.com/watch?v=rfB0KS9HXg0&list=RD",
+            "https://music.youtube.com/watch?v=rfB0KS9HXg0",
+            "https://youtu.be/rfB0KS9HXg0?t=3",
+        ] {
+            assert_eq!(youtube_thumbnails(url).first().map(String::as_str), Some(hd), "{url}");
+        }
+        assert_eq!(youtube_thumbnails("https://www.youtube.com/watch?v=../../etc"), Vec::<String>::new());
+        assert_eq!(youtube_thumbnails("https://example.com/watch?v=rfB0KS9HXg0"), Vec::<String>::new());
+        assert_eq!(youtube_thumbnails(""), Vec::<String>::new());
     }
 
     #[test]

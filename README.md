@@ -33,7 +33,8 @@ draws a real-time spectrum from your system audio through [cava](https://github.
 ## Features
 
 - **Artwork first** — album art and video thumbnails rendered with Kitty, Sixel or iTerm2
-  graphics, with a Unicode half-block fallback for any terminal.
+  graphics, with a Unicode half-block fallback for any terminal. YouTube videos get their
+  full-resolution 1280×720 thumbnail instead of the browser's small preview.
 - **Works with every MPRIS player** — automatic discovery, follows whatever is playing, and
   a compact player picker when several are open.
 - **Full playback control** — play/pause, next, previous, stop and seek. Controls a player
@@ -185,8 +186,8 @@ Sections:
 
 - **Theme** — preset, accent from artwork, accent, text, muted text, background
 - **Layout** — status bar, album line, controls, scrolling long titles, time remaining
-- **Artwork** — show/hide, size, shape (original or square crop), position (auto, top, side),
-  graphics protocol
+- **Artwork** — show/hide, size, shape (original or square crop), HD YouTube thumbnails,
+  position (auto, top, side), graphics protocol
 - **Visualizer** — on/off, style, gradient, custom colors, height, bar count, bar width,
   spacing, silence baseline, sensitivity, frame rate, smoothing
 - **Player** — follow the playing player, preferred player, seek step
