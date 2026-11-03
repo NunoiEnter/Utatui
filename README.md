@@ -17,6 +17,10 @@ artwork-first screen with a live audio visualizer.
 
 <!-- Add a screenshot or GIF here, e.g. ![UtaTUI](assets/screenshot.png) -->
 
+## SCREEBSHOTS
+
+![Uploading image.png…]()
+
 UtaTUI is **not a music player**. It is a remote control and visual companion for the
 players you already use: it discovers them over D-Bus, shows what they are playing, and
 draws a real-time spectrum from your system audio through [cava](https://github.com/karlstav/cava).
