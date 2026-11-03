@@ -127,8 +127,9 @@ fn draw_spectrum(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
     let spectrum = visualizer::Spectrum {
         values: &app.spectrum,
         mode: app.mode(),
-        spacing: v.spacing,
-        bar_width: v.bar_width,
+        // Config values aren't range-checked; keep the bar math within the area.
+        spacing: v.spacing.min(area.width),
+        bar_width: v.bar_width.min(area.width),
         baseline: v.baseline,
         gradient: &gradient,
         ascii: app.cfg.ascii,
@@ -965,6 +966,22 @@ mod tests {
             }
             assert!(art_rows * 2 >= usize::from(h), "cover too small at {w}x{h}: {art_rows} rows");
             assert!(viz_rows >= 2, "visualizer missing at {w}x{h}");
+        }
+    }
+
+    /// Out-of-range config values must not crash the renderer.
+    #[tokio::test]
+    async fn extreme_config_values_render() {
+        let (mut app, mut rrx) = app_with_art();
+        let v = &mut app.cfg.visualizer;
+        (v.spacing, v.bar_width, v.height, v.bars) = (u16::MAX, u16::MAX, u16::MAX, 0);
+        v.colors.clear();
+        app.cfg.artwork.size = f32::MAX;
+        for mode in crate::config::Mode::ALL {
+            app.cfg.visualizer.mode = mode;
+            for (w, h) in [(120, 40), (26, 5), (1, 1)] {
+                render(&mut app, &mut rrx, w, h);
+            }
         }
     }
 
