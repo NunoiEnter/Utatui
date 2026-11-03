@@ -10,6 +10,9 @@ seek_step = 5
 # Plain ASCII glyphs for terminals/fonts without good Unicode coverage.
 ascii = false
 
+# Switch to whichever player starts playing, unless you picked one by hand.
+follow_playing = true
+
 [theme]
 accent = "#b4a7f5"
 foreground = "#e6e6ef"
@@ -19,8 +22,19 @@ background = ""
 # Take the accent color from the current artwork.
 accent_from_artwork = true
 
+[layout]
+show_footer = true
+show_album = true
+show_controls = true
+# Scroll titles that are too long to fit instead of cutting them off.
+scroll_title = true
+# Show time remaining (-1:23) instead of the track length.
+remaining_time = false
+
 [artwork]
 show = true
+# auto | top | side. "auto" puts it above the text when there is room, beside it otherwise.
+position = "auto"
 # Fraction of the terminal height the artwork may use (0.1 - 0.9).
 size = 0.5
 # "auto" asks the terminal; or force "kitty", "sixel", "iterm2", "halfblocks".
@@ -32,6 +46,10 @@ enabled = true
 mode = "bars"
 bars = 48
 spacing = 1
+# Columns per bar; 0 sizes bars to fill the width.
+bar_width = 0
+# Draw a dim baseline under silent bars.
+baseline = true
 # cava sensitivity in percent.
 sensitivity = 100
 # Frames per second from cava; also the redraw rate while audio flows.

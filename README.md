@@ -35,6 +35,8 @@ draws a real-time spectrum from your system audio through [cava](https://github.
   result; save to disk with one key.
 - **Adaptive theming** — nine built-in themes, plus an accent color picked automatically
   from the current artwork.
+- **Fits any terminal** — from a full screen down to a tiny 26×5 corner pane, the artwork
+  and visualizer stay visible; long titles scroll instead of being cut off.
 - **Lightweight and event-driven** — listens to D-Bus signals instead of polling, and never
   blocks the render loop on slow players, images or audio.
 
@@ -155,25 +157,30 @@ Every binding can be changed in the config file.
 
 ## Settings
 
-Press **`o`** to open the settings panel. Changes apply immediately, so you can see the
-result behind the panel.
+Press **`o`** to open settings. Every option shows a short explanation, and changes apply
+immediately. On large terminals the settings open as a side panel so you can watch the
+result live; on smaller ones they take the whole screen.
 
-| Key            | Action                                  |
-| -------------- | --------------------------------------- |
-| `↑` `↓`        | Move between settings                   |
-| `←` `→`        | Change the value                        |
-| `enter`        | Type a value (colors)                   |
-| `s`            | Save to the config file                 |
-| `r`            | Revert to the last saved settings       |
-| `esc`          | Close the panel                         |
+| Key               | Action                                  |
+| ----------------- | --------------------------------------- |
+| `tab` / `shift+tab` or `1`–`6` | Switch section             |
+| `↑` `↓`           | Select an option                        |
+| `←` `→`           | Change the value                        |
+| `enter`           | Type a value (colors, preferred player) |
+| `d`               | Reset the option to its default         |
+| `s`               | Save to the config file                 |
+| `r`               | Revert to the last saved settings       |
+| `esc`             | Close settings                          |
 
-What you can change:
+Sections:
 
-- **Theme** — preset, accent, text, muted text, background, accent from artwork
-- **Artwork** — show/hide, size, graphics protocol
-- **Visualizer** — on/off, style, gradient, custom colors, height, bar count, spacing,
-  sensitivity, frame rate, smoothing
-- **General** — seek step, ASCII-only glyphs
+- **Theme** — preset, accent from artwork, accent, text, muted text, background
+- **Layout** — status bar, album line, controls, scrolling long titles, time remaining
+- **Artwork** — show/hide, position (auto, top, side), size, graphics protocol
+- **Visualizer** — on/off, style, gradient, custom colors, height, bar count, bar width,
+  spacing, silence baseline, sensitivity, frame rate, smoothing
+- **Player** — follow the playing player, preferred player, seek step
+- **General** — ASCII-only glyphs
 
 Built-in themes: `lavender`, `catppuccin`, `rose-pine`, `tokyo-night`, `nord`, `gruvbox`,
 `sakura`, `mono`, and `terminal` (which follows your terminal's own color scheme).

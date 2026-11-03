@@ -11,8 +11,8 @@ use ratatui_image::{Resize, StatefulImage};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::app::{App, Overlay};
-use crate::config::color;
-use crate::config::settings::{self, SECTIONS};
+use crate::config::settings::{self, TABS};
+use crate::config::{ArtPosition, color};
 use crate::media::fmt_time;
 use crate::mpris::{Player, Status};
 
@@ -68,8 +68,10 @@ const ASCII: Glyphs = Glyphs {
     bullet: "*",
 };
 
-/// Width of the settings drawer when open.
-const DRAWER_W: u16 = 50;
+/// Width of the settings drawer when the terminal is big enough to keep a live preview.
+const DRAWER_W: u16 = 52;
+/// Below this size the player switches to the mini layout.
+const MINI_BELOW: (u16, u16) = (40, 8);
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let t = &app.cfg.theme;
@@ -83,40 +85,30 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let mut area = f.area();
     f.render_widget(Block::new().style(Style::new().bg(pal.bg)), area);
 
-    // The settings drawer takes the right side so changes preview live on the left.
+    // Big terminals get a side drawer with a live preview; smaller ones a full-screen page.
     if let Overlay::Settings { .. } = app.overlay {
-        let w = DRAWER_W.min(area.width);
-        let drawer = Rect { x: area.right() - w, width: w, ..area };
-        draw_settings(f, app, drawer, &pal);
-        area.width -= w;
+        if area.width >= 100 && area.height >= 20 {
+            let drawer = Rect { x: area.right() - DRAWER_W, width: DRAWER_W, ..area };
+            draw_settings(f, app, drawer, &pal);
+            area.width -= DRAWER_W;
+        } else {
+            draw_settings(f, app, area, &pal);
+            return;
+        }
     }
 
-    let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(1)]).areas(area);
-    draw_footer(f, app, footer, &pal, g);
-
-    // Share the height between the visualizer and the player, always keeping room for the
-    // compact info block so short terminals still get both.
-    let viz_h = (body.height.saturating_sub(10) / 2)
-        .max(body.height / 3)
-        .min(app.cfg.visualizer.height)
-        .min(body.height.saturating_sub(COMPACT_INFO_H));
-    let [main, viz] = Layout::vertical([Constraint::Fill(1), Constraint::Length(viz_h)]).areas(body);
-    if viz_h > 0 && app.cfg.visualizer.enabled {
-        let gradient = gradient(&app.cfg.visualizer.colors, pal.accent);
-        let viz = viz.inner(Margin::new(viz.width.min(4), 0));
-        let spectrum = visualizer::Spectrum {
-            values: &app.spectrum,
-            mode: app.mode(),
-            spacing: app.cfg.visualizer.spacing,
-            gradient: &gradient,
-            ascii: app.cfg.ascii,
-        };
-        f.render_widget(spectrum, viz);
+    let footer_h = u16::from(app.cfg.layout.show_footer && area.height >= 8);
+    let [body, footer] = Layout::vertical([Constraint::Fill(1), Constraint::Length(footer_h)]).areas(area);
+    if footer_h > 0 {
+        draw_footer(f, app, footer, &pal, g);
     }
 
     match app.current().cloned() {
-        None => draw_empty(f, app, main, &pal),
-        Some(p) => draw_player(f, app, &p, main, &pal, g),
+        None => draw_empty(f, app, body, &pal),
+        Some(p) if body.width < MINI_BELOW.0 || body.height < MINI_BELOW.1 => {
+            draw_mini(f, app, &p, body, &pal, g);
+        }
+        Some(p) => draw_full(f, app, &p, body, &pal, g),
     }
 
     match app.overlay {
@@ -124,6 +116,24 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Overlay::Help => draw_help(f, app, area, &pal),
         Overlay::Selector(i) => draw_selector(f, app, i, area, &pal, g),
     }
+}
+
+fn draw_spectrum(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
+    if area.height == 0 || area.width == 0 || !app.cfg.visualizer.enabled {
+        return;
+    }
+    let v = &app.cfg.visualizer;
+    let gradient = gradient(&v.colors, pal.accent);
+    let spectrum = visualizer::Spectrum {
+        values: &app.spectrum,
+        mode: app.mode(),
+        spacing: v.spacing,
+        bar_width: v.bar_width,
+        baseline: v.baseline,
+        gradient: &gradient,
+        ascii: app.cfg.ascii,
+    };
+    f.render_widget(spectrum, area);
 }
 
 /// Resolves configured gradient stops; `"accent"` expands to a ramp around the accent.
@@ -155,53 +165,140 @@ fn fit(s: &str, width: usize) -> String {
     out
 }
 
+/// Shows `s` in `width` columns, scrolling it sideways when it doesn't fit.
+fn marquee(s: &str, width: usize, seconds: f32) -> String {
+    const GAP: &str = "   ·   ";
+    const COLS_PER_SECOND: f32 = 5.0;
+    if s.width() <= width {
+        return s.to_string();
+    }
+    let looped = format!("{s}{GAP}");
+    let offset = (seconds * COLS_PER_SECOND) as usize % looped.width();
+    let mut out = String::new();
+    let (mut col, mut w) = (0, 0);
+    for c in looped.chars().chain(looped.chars()) {
+        let cw = c.width().unwrap_or(0);
+        if col < offset {
+            col += cw;
+            // A wide character cut by the left edge leaves a blank column.
+            if col > offset {
+                out.push(' ');
+                w += 1;
+            }
+            continue;
+        }
+        if w + cw > width {
+            break;
+        }
+        out.push(c);
+        w += cw;
+    }
+    out
+}
+
+fn title_text(app: &App, p: &Player, width: usize) -> String {
+    let title = if p.title.is_empty() { "Unknown title" } else { &p.title };
+    if app.cfg.layout.scroll_title {
+        marquee(title, width, app.started.elapsed().as_secs_f32())
+    } else {
+        fit(title, width)
+    }
+}
+
 fn draw_empty(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
+    let w = area.width as usize;
     let msg = if app.players.is_empty() { "No media players found" } else { "Nothing selected" };
-    let lines = vec![
-        Line::styled(msg, Style::new().fg(pal.fg).add_modifier(Modifier::BOLD)),
-        Line::styled("Start playback in any MPRIS-capable app", Style::new().fg(pal.dim)),
-    ];
-    let [mid] = Layout::vertical([Constraint::Length(2)]).flex(Flex::Center).areas(area);
+    let mut lines = vec![Line::styled(fit(msg, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD))];
+    if area.height >= 3 {
+        lines.push(Line::styled(fit("Start playback in any MPRIS app", w), Style::new().fg(pal.dim)));
+    }
+    let [mid] = Layout::vertical([Constraint::Length(lines.len() as u16)]).flex(Flex::Center).areas(area);
     f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), mid);
 }
 
-/// Rows used by the text block: title, artist, album, gap, progress, gap, controls.
-const INFO_H: u16 = 7;
-/// Rows used on short terminals: title, artist, progress, controls.
-const COMPACT_INFO_H: u16 = 4;
+/// Tiny terminals: artwork on the left at full height; title, progress and the visualizer on
+/// the right. Artwork and visualizer are kept at every size; text gives way first.
+fn draw_mini(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette, g: &Glyphs) {
+    let viz_on = app.cfg.visualizer.enabled;
+    let show_art = app.cfg.artwork.show && app.art.is_some() && area.width >= 10;
+    let mut right = area;
+    if show_art {
+        let art_w = (area.height * 2).min(area.width * 2 / 5).max(2);
+        let [art, _, rest] =
+            Layout::horizontal([Constraint::Length(art_w), Constraint::Length(1), Constraint::Fill(1)])
+                .areas(area);
+        draw_art(f, app, art);
+        right = rest;
+    }
 
-fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette, g: &Glyphs) {
-    let compact = area.height < INFO_H;
-    let info_h = if compact { COMPACT_INFO_H } else { INFO_H };
-    let show_art = app.cfg.artwork.show && app.art.is_some();
+    // Rows each line needs before it appears; with the visualizer off, text takes everything.
+    let h = right.height;
+    let need = |with_viz: u16, without: u16| if viz_on { h >= with_viz } else { h >= without };
+    let w = right.width as usize;
+    let mut lines = Vec::new();
+    if need(2, 1) {
+        lines.push(Line::styled(title_text(app, p, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD)));
+    }
+    if need(6, 3) && !p.artists.is_empty() {
+        lines.push(Line::styled(fit(&p.artists.join(", "), w), Style::new().fg(pal.accent)));
+    }
+    if need(4, 2) {
+        lines.push(progress_line(app, p, w, pal, g));
+    }
+    if need(7, 4) && app.cfg.layout.show_controls {
+        lines.push(controls_line(p, pal, g));
+    }
+    let text_h = (lines.len() as u16).min(h);
+    let [text, viz] = Layout::vertical([Constraint::Length(text_h), Constraint::Fill(1)]).areas(right);
+    f.render_widget(Paragraph::new(lines), text);
+    draw_spectrum(f, app, viz, pal);
+}
 
-    // Artwork above the text, as tall as the config allows and the space permits.
-    let size = app.cfg.artwork.size.clamp(0.1, 0.9);
-    let stacked_art_h = if show_art {
-        ((area.height as f32 * size) as u16).min(area.height.saturating_sub(info_h + 2)).min(area.width / 2)
+/// Regular terminals: the centered, artwork-first composition with the visualizer below.
+fn draw_full(f: &mut Frame, app: &mut App, p: &Player, body: Rect, pal: &Palette, g: &Glyphs) {
+    let viz_h = if app.cfg.visualizer.enabled {
+        (body.height.saturating_sub(10) / 2).max(body.height / 3).min(app.cfg.visualizer.height)
     } else {
         0
     };
+    let [main, viz] = Layout::vertical([Constraint::Fill(1), Constraint::Length(viz_h)]).areas(body);
+    draw_spectrum(f, app, viz.inner(Margin::new(viz.width.min(4), 0)), pal);
 
-    // Wide or short terminals put the artwork beside the text instead, where it can use the
-    // full height; stacked, it would be squeezed to a sliver or dropped.
-    let wide = area.width > area.height * 4 && !compact;
-    let side_by_side = show_art && area.width >= 40 && (wide || stacked_art_h < 4);
+    let layout = &app.cfg.layout;
+    let full_h = 4 + u16::from(layout.show_album) + 2 * u16::from(layout.show_controls);
+    let compact = main.height < full_h;
+    let info_h = if compact { 3 + u16::from(layout.show_controls) } else { full_h };
+    let show_art = app.cfg.artwork.show && app.art.is_some();
+
+    let size = app.cfg.artwork.size.clamp(0.1, 0.9);
+    let stacked_art_h = if show_art {
+        ((main.height as f32 * size) as u16).min(main.height.saturating_sub(info_h + 2)).min(main.width / 2)
+    } else {
+        0
+    };
+    let side_by_side = show_art
+        && match app.cfg.artwork.position {
+            ArtPosition::Side => true,
+            ArtPosition::Top => false,
+            // Stacked, the cover would be squeezed to a sliver; beside the text it gets the height.
+            ArtPosition::Auto => main.width > main.height * 4 || stacked_art_h < 4,
+        };
+
     if side_by_side {
-        let margin = u16::from(area.height >= 10);
-        let art_h = area.height - margin * 2;
-        let art_w = (art_h * 2).min(area.width * 2 / 5);
+        let margin = u16::from(main.height >= 10);
+        let art_h = main.height - margin * 2;
+        let art_w = (art_h * 2).min(main.width * 2 / 5);
         let [_, art_col, _, info_col, _] = Layout::horizontal([
             Constraint::Fill(1),
             Constraint::Length(art_w),
             Constraint::Length(3),
-            Constraint::Length(area.width.saturating_sub(art_w + 7).min(60)),
+            Constraint::Length(main.width.saturating_sub(art_w + 7).min(60)),
             Constraint::Fill(1),
         ])
-        .areas(area);
+        .areas(main);
         draw_art(f, app, art_col.inner(Margin::new(0, margin)));
         let [info] = Layout::vertical([Constraint::Length(info_h)]).flex(Flex::Center).areas(info_col);
-        draw_info(f, p, info, pal, g, Alignment::Left, compact);
+        draw_info(f, app, p, info, pal, g, Alignment::Left, compact);
         return;
     }
 
@@ -214,13 +311,13 @@ fn draw_player(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palet
         Constraint::Length(info_h),
         Constraint::Fill(1),
     ])
-    .areas(area);
+    .areas(main);
     if art_h > 0 {
         draw_art(f, app, art);
     }
     let w = info.width.min(64);
     let info = Rect { x: info.x + (info.width - w) / 2, width: w, ..info };
-    draw_info(f, p, info, pal, g, Alignment::Center, compact);
+    draw_info(f, app, p, info, pal, g, Alignment::Center, compact);
 }
 
 /// Renders the artwork centered in `area`, keeping its aspect ratio.
@@ -236,9 +333,65 @@ fn draw_art(f: &mut Frame, app: &mut App, area: Rect) {
     f.render_stateful_widget(StatefulImage::default(), rect, art);
 }
 
-/// Draws title, artist, progress and controls; `compact` drops the album and spacer rows.
+/// "1:23 ━━━━●──── 3:45", shrinking to just the bar on narrow widths.
+fn progress_line(app: &App, p: &Player, w: usize, pal: &Palette, g: &Glyphs) -> Line<'static> {
+    let pos = p.position_now();
+    match p.length {
+        Some(len) => {
+            let l = fmt_time(pos);
+            let r = if app.cfg.layout.remaining_time {
+                format!("-{}", fmt_time(len.saturating_sub(pos)))
+            } else {
+                fmt_time(len)
+            };
+            let with_times = w >= l.len() + r.len() + 8;
+            let bar_w = if with_times { w - l.len() - r.len() - 2 } else { w };
+            let ratio = (pos.as_secs_f64() / len.as_secs_f64().max(0.001)).clamp(0.0, 1.0);
+            let done = ((bar_w as f64 * ratio) as usize).min(bar_w.saturating_sub(1));
+            let mut spans = vec![
+                Span::styled(g.filled.repeat(done), Style::new().fg(pal.accent)),
+                Span::styled(g.knob, Style::new().fg(pal.fg)),
+                Span::styled(g.empty.repeat(bar_w.saturating_sub(done + 1)), Style::new().fg(pal.dim)),
+            ];
+            if with_times {
+                spans.insert(0, Span::styled(format!("{l} "), Style::new().fg(pal.dim)));
+                spans.push(Span::styled(format!(" {r}"), Style::new().fg(pal.dim)));
+            }
+            Line::from(spans)
+        }
+        // Length unknown but the player does report position (e.g. a stream): elapsed only.
+        None if !p.position.is_zero() => Line::from(vec![
+            Span::styled(fmt_time(pos), Style::new().fg(pal.fg)),
+            Span::styled(format!(" {} live", g.dot), Style::new().fg(pal.dim)),
+        ]),
+        // Neither: the player (often a browser tab) exposes no progress; don't invent one.
+        None => Line::styled(
+            fit(&format!("{} doesn't share track progress", p.identity), w),
+            Style::new().fg(pal.dim).add_modifier(Modifier::ITALIC),
+        ),
+    }
+}
+
+fn controls_line(p: &Player, pal: &Palette, g: &Glyphs) -> Line<'static> {
+    let c = p.caps;
+    let on = |enabled: bool, s: Style| {
+        if enabled && c.control { s } else { Style::new().fg(pal.dim).add_modifier(Modifier::DIM) }
+    };
+    let toggle = if p.status == Status::Playing { g.pause } else { g.play };
+    Line::from(vec![
+        Span::styled(g.prev, on(c.prev, Style::new().fg(pal.fg))),
+        Span::raw("     "),
+        Span::styled(toggle, on(c.play || c.pause, Style::new().fg(pal.accent).add_modifier(Modifier::BOLD))),
+        Span::raw("     "),
+        Span::styled(g.next, on(c.next, Style::new().fg(pal.fg))),
+    ])
+}
+
+/// Title, artist, album, progress and controls; `compact` drops the album and spacer rows.
+#[allow(clippy::too_many_arguments)]
 fn draw_info(
     f: &mut Frame,
+    app: &App,
     p: &Player,
     area: Rect,
     pal: &Palette,
@@ -247,60 +400,24 @@ fn draw_info(
     compact: bool,
 ) {
     let w = area.width as usize;
-    let title = if p.title.is_empty() { "Unknown title" } else { &p.title };
-    let pos = p.position_now();
-
+    let layout = &app.cfg.layout;
     let mut lines = vec![
-        Line::styled(fit(title, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD)),
+        Line::styled(title_text(app, p, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD)),
         Line::styled(fit(&p.artists.join(", "), w), Style::new().fg(pal.accent)),
     ];
     if !compact {
-        lines.push(Line::styled(fit(&p.album, w), Style::new().fg(pal.dim)));
-        lines.push(Line::raw(""));
-    }
-
-    match p.length {
-        // "1:23 ━━━━●──── 3:45"
-        Some(len) => {
-            let (l, r) = (fmt_time(pos), fmt_time(len));
-            let bar_w = w.saturating_sub(l.len() + r.len() + 2);
-            let ratio = (pos.as_secs_f64() / len.as_secs_f64().max(0.001)).clamp(0.0, 1.0);
-            let done = ((bar_w as f64 * ratio) as usize).min(bar_w.saturating_sub(1));
-            lines.push(Line::from(vec![
-                Span::styled(format!("{l} "), Style::new().fg(pal.dim)),
-                Span::styled(g.filled.repeat(done), Style::new().fg(pal.accent)),
-                Span::styled(g.knob, Style::new().fg(pal.fg)),
-                Span::styled(g.empty.repeat(bar_w.saturating_sub(done + 1)), Style::new().fg(pal.dim)),
-                Span::styled(format!(" {r}"), Style::new().fg(pal.dim)),
-            ]));
+        if layout.show_album {
+            lines.push(Line::styled(fit(&p.album, w), Style::new().fg(pal.dim)));
         }
-        // Length unknown but the player does report position (e.g. a stream): elapsed only.
-        None if !p.position.is_zero() => lines.push(Line::from(vec![
-            Span::styled(fmt_time(pos), Style::new().fg(pal.fg)),
-            Span::styled(format!(" {} live", g.dot), Style::new().fg(pal.dim)),
-        ])),
-        // Neither: the player (often a browser tab) exposes no progress; don't invent one.
-        None => lines.push(Line::styled(
-            fit(&format!("{} doesn't share track progress", p.identity), w),
-            Style::new().fg(pal.dim).add_modifier(Modifier::ITALIC),
-        )),
-    }
-    if !compact {
         lines.push(Line::raw(""));
     }
-
-    let c = p.caps;
-    let on = |enabled: bool, s: Style| {
-        if enabled && c.control { s } else { Style::new().fg(pal.dim).add_modifier(Modifier::DIM) }
-    };
-    let toggle = if p.status == Status::Playing { g.pause } else { g.play };
-    lines.push(Line::from(vec![
-        Span::styled(g.prev, on(c.prev, Style::new().fg(pal.fg))),
-        Span::raw("     "),
-        Span::styled(toggle, on(c.play || c.pause, Style::new().fg(pal.accent).add_modifier(Modifier::BOLD))),
-        Span::raw("     "),
-        Span::styled(g.next, on(c.next, Style::new().fg(pal.fg))),
-    ]));
+    lines.push(progress_line(app, p, w, pal, g));
+    if layout.show_controls {
+        if !compact {
+            lines.push(Line::raw(""));
+        }
+        lines.push(controls_line(p, pal, g));
+    }
     f.render_widget(Paragraph::new(lines).alignment(align), area);
 }
 
@@ -312,31 +429,50 @@ fn status_label(s: Status) -> &'static str {
     }
 }
 
+/// Status bar; parts are dropped from the end as the width shrinks.
 fn draw_footer(f: &mut Frame, app: &App, area: Rect, pal: &Palette, g: &Glyphs) {
-    let mut left = vec![Span::raw("  ")];
+    let total = area.width as usize;
+    let right = match app.status() {
+        Some(s) => format!("{}  ", fit(s, total / 2)),
+        None if total >= 60 => "? help  o settings  ".to_string(),
+        None => String::new(),
+    };
+    let budget = total.saturating_sub(right.width());
+
+    let mut left: Vec<Span> = vec![Span::raw(" ")];
+    let mut used = 1;
+    let mut push = |text: String, style: Style, left: &mut Vec<Span>| {
+        if used + text.width() <= budget {
+            used += text.width();
+            left.push(Span::styled(text, style));
+            true
+        } else {
+            false
+        }
+    };
     if let Some(p) = app.current() {
         let dot = Style::new().fg(if p.status == Status::Playing { pal.accent } else { pal.dim });
-        left.push(Span::styled(g.bullet, dot));
-        left.push(Span::styled(format!(" {} ", p.identity), Style::new().fg(pal.fg)));
-        left.push(Span::styled(format!("{} {}", g.dot, status_label(p.status)), Style::new().fg(pal.dim)));
-        if app.players.len() > 1 {
-            left.push(Span::styled(
-                format!("  {} {} players", g.dot, app.players.len()),
-                Style::new().fg(pal.dim),
-            ));
+        push(format!("{} ", g.bullet), dot, &mut left);
+        // Leading space and bullet take three columns.
+        let name = fit(&p.identity, budget.saturating_sub(3).min(24));
+        if push(name, Style::new().fg(pal.fg), &mut left) {
+            push(format!(" {} {}", g.dot, status_label(p.status)), Style::new().fg(pal.dim), &mut left);
+            if app.players.len() > 1 {
+                let n = format!("  {} {} players", g.dot, app.players.len());
+                push(n, Style::new().fg(pal.dim), &mut left);
+            }
         }
     }
     if let Some(reason) = app.viz_fallback.as_deref().filter(|_| app.cfg.visualizer.enabled) {
-        left.push(Span::styled(format!("  {} no audio: {reason}", g.dot), Style::new().fg(pal.dim)));
+        push(format!("  {} no audio: {reason}", g.dot), Style::new().fg(pal.dim), &mut left);
     }
-    let right = match app.status() {
-        Some(s) => Span::styled(format!("{s}  "), Style::new().fg(pal.accent)),
-        None => Span::styled("? help  o settings  ", Style::new().fg(pal.dim)),
-    };
-    let rw = (right.width() as u16).min(area.width);
+    let rw = right.width() as u16;
     let [l, r] = Layout::horizontal([Constraint::Fill(1), Constraint::Length(rw)]).areas(area);
     f.render_widget(Line::from(left), l);
-    f.render_widget(right, r);
+    f.render_widget(
+        Span::styled(right, Style::new().fg(if app.status().is_some() { pal.accent } else { pal.dim })),
+        r,
+    );
 }
 
 fn popup(area: Rect, w: u16, h: u16) -> Rect {
@@ -356,69 +492,128 @@ fn hint(text: &str, pal: &Palette) -> Line<'static> {
     Line::styled(format!(" {text} "), Style::new().fg(pal.dim))
 }
 
+/// Settings page: tabs on top, the options of the open tab, and a description of the selected
+/// option. Borders, spacing and the description give way on small terminals.
 fn draw_settings(f: &mut Frame, app: &App, area: Rect, pal: &Palette) {
-    let Overlay::Settings { sel, edit } = &app.overlay else { return };
-    let inner_w = area.width.saturating_sub(4) as usize;
-    let label_w = 20.min(inner_w / 2);
-    let mut lines: Vec<Line> = Vec::new();
-    let mut sel_line = 0;
-    let mut idx = 0;
-    for (section, fields) in SECTIONS {
-        if !lines.is_empty() {
-            lines.push(Line::raw(""));
-        }
-        lines.push(Line::styled(
-            section.to_uppercase(),
-            Style::new().fg(pal.dim).add_modifier(Modifier::BOLD),
-        ));
-        for &field in *fields {
-            let selected = idx == *sel;
-            if selected {
-                sel_line = lines.len();
-            }
-            let value = match edit {
-                Some(buf) if selected => format!("{buf}▏"),
-                _ if selected && !settings::is_text(field) => {
-                    format!("‹ {} ›", settings::value(&app.cfg, field))
-                }
-                _ => settings::value(&app.cfg, field),
-            };
-            let value = fit(&value, inner_w.saturating_sub(label_w + 3));
-            let swatch = swatch_for(app, field);
-            let base = if selected {
-                Style::new().fg(pal.on_accent()).bg(pal.accent)
-            } else {
-                Style::new().fg(pal.fg)
-            };
-            let pad = inner_w.saturating_sub(label_w + 2 + value.width() + swatch.is_some() as usize * 2);
-            let mut spans = vec![
-                Span::styled(format!(" {:<w$}", settings::label(field), w = label_w), base),
-                Span::styled(" ".repeat(pad), base),
-            ];
-            if let Some(c) = swatch {
-                spans.push(Span::styled("■ ", base.fg(c)));
-            }
-            spans.push(Span::styled(
-                format!("{value} "),
-                if selected { base } else { Style::new().fg(pal.accent) },
-            ));
-            lines.push(Line::from(spans));
-            idx += 1;
-        }
-    }
-
-    // Scroll so the selected row stays visible.
-    let visible = area.height.saturating_sub(4) as usize;
-    let scroll = sel_line.saturating_sub(visible.saturating_sub(3));
-    let title = if app.dirty { "settings •" } else { "settings" };
-    let help = if edit.is_some() {
-        "type · enter apply · esc cancel"
-    } else {
-        "←→ change · enter edit · s save · r revert"
-    };
-    let block = frame_block(title, pal).title_bottom(hint(help, pal)).padding(Padding::uniform(1));
+    let Overlay::Settings { tab, sel, edit } = &app.overlay else { return };
     f.render_widget(Clear, area);
-    f.render_widget(Paragraph::new(lines).block(block).scroll((scroll as u16, 0)), area);
+    let roomy = area.width >= 30 && area.height >= 10;
+    let inner = if roomy {
+        let title = if app.dirty { "Settings  •  unsaved" } else { "Settings" };
+        let block = frame_block(title, pal).padding(Padding::horizontal(1));
+        let inner = block.inner(area);
+        f.render_widget(block, area);
+        inner
+    } else {
+        area
+    };
+    let w = inner.width as usize;
+
+    let tabs_line = tabs_line(*tab, w, pal);
+
+    let hints = match (edit.is_some(), w >= 70, w >= 40) {
+        (true, _, _) => "type · enter apply · esc cancel",
+        (false, true, _) => {
+            "tab section · ↑↓ select · ←→ change · enter edit · d default · s save · esc close"
+        }
+        (false, false, true) => "tab · ←→ change · d default · s save · esc",
+        _ => "tab ←→ s esc",
+    };
+    let fields = TABS[*tab].1;
+    let field = fields[*sel];
+    let help_h = if inner.height >= 9 { 2 } else { 0 };
+    let gap = u16::from(inner.height >= 8);
+    let hint_h = u16::from(inner.height >= 4);
+    // The description sits right under the options; leftover space goes below it.
+    let list_h = (fields.len() as u16).min(inner.height.saturating_sub(1 + gap * 2 + help_h + hint_h));
+    let [tabs_area, _, list_area, _, help_area, _, hint_area] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(gap),
+        Constraint::Length(list_h),
+        Constraint::Length(gap),
+        Constraint::Length(help_h),
+        Constraint::Fill(1),
+        Constraint::Length(hint_h),
+    ])
+    .areas(inner);
+    f.render_widget(tabs_line, tabs_area);
+
+    let lines: Vec<Line> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, &fld)| setting_row(app, fld, i == *sel, edit.as_deref(), w, pal))
+        .collect();
+    let visible = list_area.height as usize;
+    let scroll = (*sel + 1).saturating_sub(visible);
+    f.render_widget(Paragraph::new(lines).scroll((scroll as u16, 0)), list_area);
+
+    if help_h > 0 {
+        let help = Paragraph::new(settings::help(field))
+            .style(Style::new().fg(pal.dim).add_modifier(Modifier::ITALIC))
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        f.render_widget(help, help_area);
+    }
+    let hint_text = match app.status() {
+        Some(s) => Line::styled(fit(s, w), Style::new().fg(pal.accent)),
+        None => Line::styled(fit(hints, w), Style::new().fg(pal.dim)),
+    };
+    f.render_widget(hint_text, hint_area);
+}
+
+/// Tab bar: every name when they fit, otherwise only the open tab with arrows.
+fn tabs_line(tab: usize, w: usize, pal: &Palette) -> Line<'static> {
+    let names: Vec<String> = TABS.iter().enumerate().map(|(i, (n, _))| format!(" {} {n} ", i + 1)).collect();
+    if names.iter().map(|n| n.width()).sum::<usize>() <= w {
+        Line::from(
+            names
+                .iter()
+                .enumerate()
+                .map(|(i, n)| {
+                    if i == tab {
+                        Span::styled(
+                            n.clone(),
+                            Style::new().fg(pal.on_accent()).bg(pal.accent).add_modifier(Modifier::BOLD),
+                        )
+                    } else {
+                        Span::styled(n.clone(), Style::new().fg(pal.dim))
+                    }
+                })
+                .collect::<Vec<_>>(),
+        )
+    } else {
+        let name = format!("‹ {} {}/{} ›", TABS[tab].0, tab + 1, TABS.len());
+        Line::styled(fit(&name, w), Style::new().fg(pal.accent).add_modifier(Modifier::BOLD))
+    }
+}
+
+/// One option row: label on the left, value (and color swatch) on the right.
+fn setting_row(
+    app: &App,
+    fld: settings::Field,
+    selected: bool,
+    edit: Option<&str>,
+    w: usize,
+    pal: &Palette,
+) -> Line<'static> {
+    let label_w = 20.min(w / 2);
+    let value = match edit {
+        Some(buf) if selected => format!("{buf}▏"),
+        _ if selected && !settings::is_text(fld) => format!("‹ {} ›", settings::value(&app.cfg, fld)),
+        _ => settings::value(&app.cfg, fld),
+    };
+    let value = fit(&value, w.saturating_sub(label_w + 3));
+    let swatch = swatch_for(app, fld);
+    let base =
+        if selected { Style::new().fg(pal.on_accent()).bg(pal.accent) } else { Style::new().fg(pal.fg) };
+    let label = fit(settings::label(fld), label_w);
+    let pad = w.saturating_sub(1 + label_w + value.width() + 1 + usize::from(swatch.is_some()) * 2);
+    let mut spans =
+        vec![Span::styled(format!(" {label:<label_w$}"), base), Span::styled(" ".repeat(pad), base)];
+    if let Some(c) = swatch {
+        spans.push(Span::styled("■ ", base.fg(c)));
+    }
+    spans.push(Span::styled(format!("{value} "), if selected { base } else { Style::new().fg(pal.accent) }));
+    Line::from(spans)
 }
 
 /// Color preview next to color fields.
@@ -513,6 +708,7 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use ratatui::style::Color;
+    use unicode_width::UnicodeWidthStr;
 
     use crate::app::{App, Event};
     use crate::mpris::{Caps, Player, Status, Update};
@@ -580,54 +776,21 @@ mod tests {
         assert!(text(&term).contains("doesn't share track progress"));
     }
 
-    /// Short terminals keep both the visualizer and the essential info.
-    #[tokio::test]
-    async fn short_terminal_shows_visualizer() {
+    /// App with a playing track, loaded artwork and a full-scale spectrum.
+    fn app_with_art() -> (App, tokio::sync::mpsc::UnboundedReceiver<ratatui_image::thread::ResizeRequest>) {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let (rtx, _rrx) = tokio::sync::mpsc::unbounded_channel();
+        let (rtx, rrx) = tokio::sync::mpsc::unbounded_channel();
         let picker = ratatui_image::picker::Picker::halfblocks();
-        let mut app = App::new(crate::config::Config::default(), None, None, tx, picker, rtx);
-        app.handle(Event::Player(Update::Changed(Player {
-            bus: "org.mpris.MediaPlayer2.test".into(),
-            identity: "Test".into(),
-            status: Status::Playing,
-            title: "Song".into(),
-            artists: vec!["Artist".into()],
-            album: "Album".into(),
-            art_url: None,
-            length: Some(Duration::from_secs(200)),
-            position: Duration::from_secs(50),
-            position_at: Instant::now(),
-            rate: 1.0,
-            caps: Caps { control: true, play: true, pause: true, next: true, prev: true, seek: true },
-        })));
-        app.handle(Event::Spectrum(vec![1.0; 48]));
-        for (w, h) in [(65, 10), (65, 8), (40, 6)] {
-            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-            term.draw(|f| super::draw(f, &mut app)).unwrap();
-            let screen = text(&term);
-            assert!(screen.contains('█'), "no visualizer at {w}x{h}");
-            assert!(screen.contains("Song") && screen.contains("3:20"), "info missing at {w}x{h}");
-            if std::env::var_os("SHOW").is_some() {
-                println!("{}", term.backend());
-            }
-        }
-    }
-
-    #[tokio::test]
-    /// Short terminals keep the artwork too, beside the text instead of above it.
-    async fn short_terminal_shows_artwork() {
-        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
-        let (rtx, mut rrx) = tokio::sync::mpsc::unbounded_channel();
-        let picker = ratatui_image::picker::Picker::halfblocks();
-        let mut app = App::new(crate::config::Config::default(), None, None, tx, picker, rtx);
+        let mut cfg = crate::config::Config::default();
+        cfg.visualizer.cava_path = "/nonexistent/cava".into();
+        let mut app = App::new(cfg, None, None, tx, picker, rtx);
         app.handle(Event::Player(Update::Changed(Player {
             bus: "b".into(),
-            identity: "Test".into(),
+            identity: "Mozilla firefox".into(),
             status: Status::Playing,
-            title: "Song".into(),
+            title: "ロクデナシ「星を巡る」/ Rokudenashi - Circling the Stars【Official Music Video】".into(),
             artists: vec!["Artist".into()],
-            album: "Album".into(),
+            album: "youtube.com".into(),
             art_url: Some("x".into()),
             length: Some(Duration::from_secs(200)),
             position: Duration::from_secs(50),
@@ -639,22 +802,91 @@ mod tests {
             image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(512, 512, image::Rgb([200, 50, 90])));
         app.handle(Event::Art { url: "x".into(), img: Some(img), accent: None });
         app.handle(Event::Spectrum(vec![1.0; 48]));
-        for (w, h) in [(55, 11), (55, 9), (65, 10), (55, 7), (100, 40)] {
-            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
-            term.draw(|f| super::draw(f, &mut app)).unwrap();
-            while let Ok(req) = rrx.try_recv() {
-                app.handle(Event::Resized(req.resize_encode().unwrap()));
-            }
-            term.draw(|f| super::draw(f, &mut app)).unwrap();
-            let painted = term
-                .backend()
-                .buffer()
-                .content()
-                .iter()
-                .filter(|c| c.bg == Color::Rgb(200, 50, 90) || c.fg == Color::Rgb(200, 50, 90))
-                .count();
-            assert!(painted >= 20, "artwork missing at {w}x{h} ({painted} cells)");
+        (app, rrx)
+    }
+
+    /// Draws twice, running the image resize in between as the background worker would.
+    fn render(
+        app: &mut App,
+        rrx: &mut tokio::sync::mpsc::UnboundedReceiver<ratatui_image::thread::ResizeRequest>,
+        w: u16,
+        h: u16,
+    ) -> Terminal<TestBackend> {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        term.draw(|f| super::draw(f, app)).unwrap();
+        while let Ok(req) = rrx.try_recv() {
+            app.handle(Event::Resized(req.resize_encode().unwrap()));
         }
+        term.draw(|f| super::draw(f, app)).unwrap();
+        term
+    }
+
+    fn art_cells(term: &Terminal<TestBackend>) -> usize {
+        let art = Color::Rgb(200, 50, 90);
+        term.backend().buffer().content().iter().filter(|c| c.bg == art || c.fg == art).count()
+    }
+
+    /// Artwork and visualizer stay visible at every size, down to tiny terminals.
+    #[tokio::test]
+    async fn artwork_and_visualizer_at_every_size() {
+        let (mut app, mut rrx) = app_with_art();
+        for (w, h) in
+            [(100, 40), (65, 10), (55, 11), (55, 7), (40, 6), (26, 5), (26, 4), (20, 3), (15, 2), (12, 1)]
+        {
+            let term = render(&mut app, &mut rrx, w, h);
+            let screen = text(&term);
+            if std::env::var_os("SHOW").is_some() {
+                println!("== {w}x{h}\n{}", term.backend());
+            }
+            assert!(screen.contains('█'), "no visualizer at {w}x{h}");
+            assert!(art_cells(&term) > 0, "no artwork at {w}x{h}");
+            if h >= 2 {
+                assert!(
+                    screen.contains("ロ") || screen.contains("Ro") || screen.contains("Ci"),
+                    "no title at {w}x{h}"
+                );
+            }
+        }
+        for (w, h) in [(5, 5), (3, 1), (1, 1)] {
+            render(&mut app, &mut rrx, w, h); // must not panic
+        }
+    }
+
+    /// The settings page stays usable on small terminals: tabs, options and navigation.
+    #[tokio::test]
+    async fn settings_page_on_small_terminals() {
+        let (mut app, mut rrx) = app_with_art();
+        key(&mut app, KeyCode::Char('o'));
+        key(&mut app, KeyCode::Tab); // Layout tab
+        let term = render(&mut app, &mut rrx, 26, 5);
+        let screen = text(&term);
+        assert!(screen.contains("Layout"), "tab name missing:\n{}", term.backend());
+        assert!(screen.contains("Status bar"), "options missing:\n{}", term.backend());
+
+        key(&mut app, KeyCode::Right); // toggle status bar off
+        assert!(!app.cfg.layout.show_footer);
+        key(&mut app, KeyCode::Char('d')); // reset to default
+        assert!(app.cfg.layout.show_footer);
+
+        key(&mut app, KeyCode::Char('3')); // Artwork tab by number
+        key(&mut app, KeyCode::Down); // Position
+        let term = render(&mut app, &mut rrx, 80, 24);
+        let screen = text(&term);
+        assert!(screen.contains("Position") && screen.contains("auto: above"), "{}", term.backend());
+        for (w, h) in [(120, 40), (60, 12), (1, 1)] {
+            render(&mut app, &mut rrx, w, h);
+        }
+    }
+
+    #[test]
+    fn marquee_scrolls_long_text() {
+        assert_eq!(super::marquee("short", 10, 3.0), "short");
+        let a = super::marquee("a long title that does not fit", 10, 0.0);
+        let b = super::marquee("a long title that does not fit", 10, 1.0);
+        assert_eq!(a, "a long tit");
+        assert_ne!(a, b);
+        assert!(b.width() <= 10);
+        assert!(super::marquee("少女レイ少女レイ少女レイ", 7, 0.3).width() <= 7);
     }
 
     #[test]

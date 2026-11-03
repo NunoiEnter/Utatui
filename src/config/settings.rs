@@ -89,9 +89,13 @@ pub enum Field {
     Foreground,
     Dim,
     Background,
-    Ascii,
-    SeekStep,
+    ShowFooter,
+    ShowAlbum,
+    ShowControls,
+    ScrollTitle,
+    RemainingTime,
     ArtShow,
+    ArtPosition,
     ArtSize,
     ArtProtocol,
     VizEnabled,
@@ -100,21 +104,30 @@ pub enum Field {
     VizColors,
     VizHeight,
     VizBars,
+    VizBarWidth,
     VizSpacing,
+    VizBaseline,
     VizSensitivity,
     VizFramerate,
     VizSmoothing,
+    FollowPlaying,
+    PreferredPlayer,
+    SeekStep,
+    Ascii,
 }
 
 use Field::{
-    Accent, AccentFromArt, ArtProtocol, ArtShow, ArtSize, Ascii, Background, Dim, Foreground, SeekStep,
-    ThemePreset, VizBars, VizColors, VizEnabled, VizFramerate, VizGradient, VizHeight, VizMode,
-    VizSensitivity, VizSmoothing, VizSpacing,
+    Accent, AccentFromArt, ArtPosition, ArtProtocol, ArtShow, ArtSize, Ascii, Background, Dim, FollowPlaying,
+    Foreground, PreferredPlayer, RemainingTime, ScrollTitle, SeekStep, ShowAlbum, ShowControls, ShowFooter,
+    ThemePreset, VizBarWidth, VizBars, VizBaseline, VizColors, VizEnabled, VizFramerate, VizGradient,
+    VizHeight, VizMode, VizSensitivity, VizSmoothing, VizSpacing,
 };
 
-pub const SECTIONS: &[(&str, &[Field])] = &[
+/// Settings tabs, in display order.
+pub const TABS: &[(&str, &[Field])] = &[
     ("Theme", &[ThemePreset, AccentFromArt, Accent, Foreground, Dim, Background]),
-    ("Artwork", &[ArtShow, ArtSize, ArtProtocol]),
+    ("Layout", &[ShowFooter, ShowAlbum, ShowControls, ScrollTitle, RemainingTime]),
+    ("Artwork", &[ArtShow, ArtPosition, ArtSize, ArtProtocol]),
     (
         "Visualizer",
         &[
@@ -124,13 +137,16 @@ pub const SECTIONS: &[(&str, &[Field])] = &[
             VizColors,
             VizHeight,
             VizBars,
+            VizBarWidth,
             VizSpacing,
+            VizBaseline,
             VizSensitivity,
             VizFramerate,
             VizSmoothing,
         ],
     ),
-    ("General", &[SeekStep, Ascii]),
+    ("Player", &[FollowPlaying, PreferredPlayer, SeekStep]),
+    ("General", &[Ascii]),
 ];
 
 /// What a change needs beyond updating the config.
@@ -145,10 +161,8 @@ pub enum Effect {
 
 const PROTOCOLS: &[&str] = &["auto", "kitty", "sixel", "iterm2", "halfblocks"];
 const FRAMERATES: &[u32] = &[30, 60, 90, 120, 144];
-
-pub fn all() -> impl Iterator<Item = Field> {
-    SECTIONS.iter().flat_map(|(_, f)| f.iter().copied())
-}
+const POSITIONS: [super::ArtPosition; 3] =
+    [super::ArtPosition::Auto, super::ArtPosition::Top, super::ArtPosition::Side];
 
 pub fn label(f: Field) -> &'static str {
     match f {
@@ -158,9 +172,13 @@ pub fn label(f: Field) -> &'static str {
         Foreground => "Text",
         Dim => "Muted text",
         Background => "Background",
-        Ascii => "ASCII glyphs",
-        SeekStep => "Seek step",
+        ShowFooter => "Status bar",
+        ShowAlbum => "Album line",
+        ShowControls => "Controls",
+        ScrollTitle => "Scroll long titles",
+        RemainingTime => "Time remaining",
         ArtShow => "Show artwork",
+        ArtPosition => "Position",
         ArtSize => "Size",
         ArtProtocol => "Protocol",
         VizEnabled => "Enabled",
@@ -169,16 +187,59 @@ pub fn label(f: Field) -> &'static str {
         VizColors => "Colors",
         VizHeight => "Height",
         VizBars => "Bars",
+        VizBarWidth => "Bar width",
         VizSpacing => "Spacing",
+        VizBaseline => "Baseline",
         VizSensitivity => "Sensitivity",
         VizFramerate => "Frame rate",
         VizSmoothing => "Smoothing",
+        FollowPlaying => "Follow playing",
+        PreferredPlayer => "Preferred player",
+        SeekStep => "Seek step",
+        Ascii => "ASCII glyphs",
     }
 }
 
-/// Fields edited by typing (colors) rather than stepping.
+/// One-line explanation shown under the settings list.
+pub fn help(f: Field) -> &'static str {
+    match f {
+        ThemePreset => "Color theme. Sets accent, text and visualizer colors together.",
+        AccentFromArt => "Pick the accent color from the current artwork.",
+        Accent => "Highlight color, e.g. #cba6f7 or magenta. Press enter to type.",
+        Foreground => "Main text color. Press enter to type.",
+        Dim => "Color for secondary text such as times and hints.",
+        Background => "Background color. Leave empty to keep the terminal's own.",
+        ShowFooter => "Bottom bar with the player name and status.",
+        ShowAlbum => "Line with the album, or the website for browser media.",
+        ShowControls => "Previous / play / next buttons.",
+        ScrollTitle => "Scroll titles that are too long to fit instead of cutting them.",
+        RemainingTime => "Show time left (-1:23) instead of the track length.",
+        ArtShow => "Show the album art or video thumbnail.",
+        ArtPosition => "auto: above when there's room, beside otherwise. top / side: always.",
+        ArtSize => "How much of the screen height the artwork may use.",
+        ArtProtocol => "Image method. Use halfblocks if images look wrong. Needs restart.",
+        VizEnabled => "Show the audio visualizer (needs cava installed).",
+        VizMode => "bars, mirror, wave, blocks or minimal. Also cycle with v.",
+        VizGradient => "Visualizer color scheme. \"accent\" follows the accent color.",
+        VizColors => "Gradient colors bottom to top, comma separated. Press enter to type.",
+        VizHeight => "Rows the visualizer uses when there is room.",
+        VizBars => "Number of frequency bands cava measures.",
+        VizBarWidth => "Columns per bar. auto fills the available width.",
+        VizSpacing => "Empty columns between bars.",
+        VizBaseline => "Dim line under silent bars, so silence doesn't look broken.",
+        VizSensitivity => "How tall bars get for a given loudness.",
+        VizFramerate => "Visualizer updates per second. Lower uses less CPU.",
+        VizSmoothing => "Higher is smoother and calmer, lower is snappier.",
+        FollowPlaying => "Switch to whichever player starts playing.",
+        PreferredPlayer => "Prefer this player when several play, e.g. spotify. Enter to type.",
+        SeekStep => "Seconds to jump with the seek keys.",
+        Ascii => "Plain ASCII symbols for fonts without good Unicode support.",
+    }
+}
+
+/// Fields edited by typing rather than stepping.
 pub fn is_text(f: Field) -> bool {
-    matches!(f, Accent | Foreground | Dim | Background | VizColors)
+    matches!(f, Accent | Foreground | Dim | Background | VizColors | PreferredPlayer)
 }
 
 fn on_off(b: bool) -> String {
@@ -186,7 +247,7 @@ fn on_off(b: bool) -> String {
 }
 
 pub fn value(c: &Config, f: Field) -> String {
-    let (t, a, v) = (&c.theme, &c.artwork, &c.visualizer);
+    let (t, l, a, v) = (&c.theme, &c.layout, &c.artwork, &c.visualizer);
     match f {
         ThemePreset => THEMES
             .iter()
@@ -204,9 +265,13 @@ pub fn value(c: &Config, f: Field) -> String {
                 t.background.clone()
             }
         }
-        Ascii => on_off(c.ascii),
-        SeekStep => format!("{}s", c.seek_step),
+        ShowFooter => on_off(l.show_footer),
+        ShowAlbum => on_off(l.show_album),
+        ShowControls => on_off(l.show_controls),
+        ScrollTitle => on_off(l.scroll_title),
+        RemainingTime => on_off(l.remaining_time),
         ArtShow => on_off(a.show),
+        ArtPosition => format!("{:?}", a.position).to_lowercase(),
         ArtSize => format!("{:.0}%", a.size * 100.0),
         ArtProtocol => a.protocol.clone(),
         VizEnabled => on_off(v.enabled),
@@ -215,10 +280,22 @@ pub fn value(c: &Config, f: Field) -> String {
         VizColors => v.colors.join(", "),
         VizHeight => format!("{} rows", v.height),
         VizBars => v.bars.to_string(),
+        VizBarWidth => {
+            if v.bar_width == 0 {
+                "auto".into()
+            } else {
+                v.bar_width.to_string()
+            }
+        }
         VizSpacing => v.spacing.to_string(),
+        VizBaseline => on_off(v.baseline),
         VizSensitivity => format!("{}%", v.sensitivity),
         VizFramerate => format!("{} fps", v.framerate),
         VizSmoothing => v.noise_reduction.to_string(),
+        FollowPlaying => on_off(c.follow_playing),
+        PreferredPlayer => c.preferred_player.clone().unwrap_or_else(|| "none".into()),
+        SeekStep => format!("{}s", c.seek_step),
+        Ascii => on_off(c.ascii),
     }
 }
 
@@ -255,9 +332,19 @@ fn cycle<T: PartialEq + Copy>(options: &[T], cur: T, dir: i32) -> T {
     options[(i + dir).rem_euclid(options.len() as i32) as usize]
 }
 
+/// What a field change requires, so resetting and stepping report the same effect.
+fn effect_of(f: Field) -> Effect {
+    match f {
+        VizEnabled | VizBars | VizSensitivity | VizFramerate | VizSmoothing => Effect::RestartVisualizer,
+        ArtProtocol => Effect::NextLaunch,
+        _ => Effect::None,
+    }
+}
+
 /// Steps a non-text field left (`dir < 0`) or right (`dir > 0`).
 pub fn adjust(c: &mut Config, f: Field, dir: i32) -> Effect {
-    let (t, a, v) = (&mut c.theme, &mut c.artwork, &mut c.visualizer);
+    let (t, l, a, v) = (&mut c.theme, &mut c.layout, &mut c.artwork, &mut c.visualizer);
+    let flip = |b: &mut bool| *b = !*b;
     match f {
         ThemePreset => {
             let names: Vec<&str> = THEMES.iter().map(|p| p.name).collect();
@@ -276,19 +363,17 @@ pub fn adjust(c: &mut Config, f: Field, dir: i32) -> Effect {
                 v.colors = p.gradient.iter().map(std::string::ToString::to_string).collect();
             }
         }
-        AccentFromArt => t.accent_from_artwork = !t.accent_from_artwork,
-        Ascii => c.ascii = !c.ascii,
-        SeekStep => c.seek_step = step(c.seek_step, dir, 1, 1, 60),
-        ArtShow => a.show = !a.show,
+        AccentFromArt => flip(&mut t.accent_from_artwork),
+        ShowFooter => flip(&mut l.show_footer),
+        ShowAlbum => flip(&mut l.show_album),
+        ShowControls => flip(&mut l.show_controls),
+        ScrollTitle => flip(&mut l.scroll_title),
+        RemainingTime => flip(&mut l.remaining_time),
+        ArtShow => flip(&mut a.show),
+        ArtPosition => a.position = cycle(&POSITIONS, a.position, dir),
         ArtSize => a.size = (step(a.size, dir, 0.05, 0.15, 0.9) * 100.0).round() / 100.0,
-        ArtProtocol => {
-            a.protocol = cycle(PROTOCOLS, a.protocol.as_str(), dir).into();
-            return Effect::NextLaunch;
-        }
-        VizEnabled => {
-            v.enabled = !v.enabled;
-            return Effect::RestartVisualizer;
-        }
+        ArtProtocol => a.protocol = cycle(PROTOCOLS, a.protocol.as_str(), dir).into(),
+        VizEnabled => flip(&mut v.enabled),
         VizMode => v.mode = cycle(&Mode::ALL, v.mode, dir),
         VizGradient => {
             let mut names: Vec<&str> = vec!["accent"];
@@ -300,26 +385,62 @@ pub fn adjust(c: &mut Config, f: Field, dir: i32) -> Effect {
             };
         }
         VizHeight => v.height = step(v.height, dir, 1, 1, 30),
-        VizBars => {
-            v.bars = step(v.bars, dir, 4, 4, 256);
-            return Effect::RestartVisualizer;
-        }
+        VizBars => v.bars = step(v.bars, dir, 4, 4, 256),
+        VizBarWidth => v.bar_width = step(v.bar_width, dir, 1, 0, 8),
         VizSpacing => v.spacing = step(v.spacing, dir, 1, 0, 4),
-        VizSensitivity => {
-            v.sensitivity = step(v.sensitivity, dir, 10, 10, 500);
-            return Effect::RestartVisualizer;
-        }
-        VizFramerate => {
-            v.framerate = cycle(FRAMERATES, v.framerate, dir);
-            return Effect::RestartVisualizer;
-        }
-        VizSmoothing => {
-            v.noise_reduction = step(v.noise_reduction, dir, 5, 0, 100);
-            return Effect::RestartVisualizer;
-        }
-        Accent | Foreground | Dim | Background | VizColors => {}
+        VizBaseline => flip(&mut v.baseline),
+        VizSensitivity => v.sensitivity = step(v.sensitivity, dir, 10, 10, 500),
+        VizFramerate => v.framerate = cycle(FRAMERATES, v.framerate, dir),
+        VizSmoothing => v.noise_reduction = step(v.noise_reduction, dir, 5, 0, 100),
+        FollowPlaying => flip(&mut c.follow_playing),
+        SeekStep => c.seek_step = step(c.seek_step, dir, 1, 1, 60),
+        Ascii => flip(&mut c.ascii),
+        Accent | Foreground | Dim | Background | VizColors | PreferredPlayer => return Effect::None,
     }
-    Effect::None
+    effect_of(f)
+}
+
+/// Restores a field to its default value.
+pub fn reset(c: &mut Config, f: Field) -> Effect {
+    let d = Config::default();
+    match f {
+        ThemePreset => {
+            c.theme.accent = d.theme.accent;
+            c.theme.foreground = d.theme.foreground;
+            c.theme.dim = d.theme.dim;
+            c.visualizer.colors = d.visualizer.colors;
+        }
+        AccentFromArt => c.theme.accent_from_artwork = d.theme.accent_from_artwork,
+        Accent => c.theme.accent = d.theme.accent,
+        Foreground => c.theme.foreground = d.theme.foreground,
+        Dim => c.theme.dim = d.theme.dim,
+        Background => c.theme.background = d.theme.background,
+        ShowFooter => c.layout.show_footer = d.layout.show_footer,
+        ShowAlbum => c.layout.show_album = d.layout.show_album,
+        ShowControls => c.layout.show_controls = d.layout.show_controls,
+        ScrollTitle => c.layout.scroll_title = d.layout.scroll_title,
+        RemainingTime => c.layout.remaining_time = d.layout.remaining_time,
+        ArtShow => c.artwork.show = d.artwork.show,
+        ArtPosition => c.artwork.position = d.artwork.position,
+        ArtSize => c.artwork.size = d.artwork.size,
+        ArtProtocol => c.artwork.protocol = d.artwork.protocol,
+        VizEnabled => c.visualizer.enabled = d.visualizer.enabled,
+        VizMode => c.visualizer.mode = d.visualizer.mode,
+        VizGradient | VizColors => c.visualizer.colors = d.visualizer.colors,
+        VizHeight => c.visualizer.height = d.visualizer.height,
+        VizBars => c.visualizer.bars = d.visualizer.bars,
+        VizBarWidth => c.visualizer.bar_width = d.visualizer.bar_width,
+        VizSpacing => c.visualizer.spacing = d.visualizer.spacing,
+        VizBaseline => c.visualizer.baseline = d.visualizer.baseline,
+        VizSensitivity => c.visualizer.sensitivity = d.visualizer.sensitivity,
+        VizFramerate => c.visualizer.framerate = d.visualizer.framerate,
+        VizSmoothing => c.visualizer.noise_reduction = d.visualizer.noise_reduction,
+        FollowPlaying => c.follow_playing = d.follow_playing,
+        PreferredPlayer => c.preferred_player = d.preferred_player,
+        SeekStep => c.seek_step = d.seek_step,
+        Ascii => c.ascii = d.ascii,
+    }
+    effect_of(f)
 }
 
 fn valid_color(s: &str) -> bool {
@@ -349,6 +470,9 @@ pub fn set_text(c: &mut Config, f: Field, input: &str) -> Result<(), String> {
                 return Err("enter at least one color".into());
             }
             c.visualizer.colors = colors;
+        }
+        PreferredPlayer => {
+            c.preferred_player = (!s.is_empty() && s != "none").then(|| s.to_string());
         }
         _ => {}
     }
@@ -387,6 +511,28 @@ mod tests {
         assert_eq!(c.visualizer.colors.len(), 2);
         assert!(set_text(&mut c, Background, "").is_ok());
         assert_eq!(value(&c, Background), "terminal");
-        assert_eq!(all().count(), 21);
+
+        set_text(&mut c, PreferredPlayer, "spotify").unwrap();
+        assert_eq!(c.preferred_player.as_deref(), Some("spotify"));
+        set_text(&mut c, PreferredPlayer, "").unwrap();
+        assert_eq!(value(&c, PreferredPlayer), "none");
+
+        adjust(&mut c, VizBarWidth, -1);
+        assert_eq!(value(&c, VizBarWidth), "auto");
+        adjust(&mut c, ArtPosition, 1);
+        assert_eq!(value(&c, ArtPosition), "top");
+        assert_eq!(reset(&mut c, ArtPosition), Effect::None);
+        assert_eq!(value(&c, ArtPosition), "auto");
+        c.visualizer.bars = 100;
+        assert_eq!(reset(&mut c, VizBars), Effect::RestartVisualizer);
+        assert_eq!(c.visualizer.bars, 48);
+
+        // Every field has a label and help text, and appears in exactly one tab.
+        let fields: Vec<Field> = TABS.iter().flat_map(|(_, f)| f.iter().copied()).collect();
+        assert_eq!(fields.len(), 31);
+        for f in &fields {
+            assert!(!label(*f).is_empty() && !help(*f).is_empty());
+            assert_eq!(fields.iter().filter(|g| g == &f).count(), 1);
+        }
     }
 }

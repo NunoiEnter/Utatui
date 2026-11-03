@@ -37,8 +37,9 @@ pub enum Overlay {
     None,
     Selector(usize),
     Help,
-    /// Selected field index, and the text being typed when editing a text field.
+    /// Open tab, selected field within it, and the text being typed into a text field.
     Settings {
+        tab: usize,
         sel: usize,
         edit: Option<String>,
     },
@@ -68,7 +69,7 @@ pub struct App {
     pub overlay: Overlay,
     status: Option<(String, Instant)>,
     last_resync: Instant,
-    started: Instant,
+    pub started: Instant,
     pub quit: bool,
 }
 
@@ -142,6 +143,8 @@ impl App {
             Some(Duration::from_millis(100))
         } else if playing && self.viz_fallback.is_some() && self.cfg.visualizer.enabled {
             Some(Duration::from_millis(50)) // idle animation
+        } else if playing && self.cfg.layout.scroll_title {
+            Some(Duration::from_millis(200)) // scrolling title
         } else if playing || self.status.is_some() {
             Some(Duration::from_millis(500)) // progress bar / status expiry
         } else {
@@ -245,7 +248,7 @@ impl App {
     /// Follows whatever is playing unless the user pinned a player.
     fn auto_select(&mut self) {
         let keep = match self.current() {
-            Some(p) => self.pinned || p.status == Status::Playing,
+            Some(p) => self.pinned || p.status == Status::Playing || !self.cfg.follow_playing,
             None => false,
         };
         if keep {
@@ -322,7 +325,7 @@ impl App {
         match action {
             KeyAction::Quit => self.quit = true,
             KeyAction::Help => self.overlay = Overlay::Help,
-            KeyAction::Settings => self.overlay = Overlay::Settings { sel: 0, edit: None },
+            KeyAction::Settings => self.overlay = Overlay::Settings { tab: 0, sel: 0, edit: None },
             KeyAction::PlayerSelector => {
                 let i = self.players.iter().position(|p| Some(&p.bus) == self.selected.as_ref()).unwrap_or(0);
                 self.overlay = Overlay::Selector(i);
@@ -349,9 +352,9 @@ impl App {
     }
 
     fn settings_key(&mut self, k: KeyEvent) {
-        let Overlay::Settings { sel, edit } = &mut self.overlay else { return };
-        let (mut sel, mut edit) = (*sel, edit.take());
-        let fields: Vec<Field> = settings::all().collect();
+        let Overlay::Settings { tab, sel, edit } = &mut self.overlay else { return };
+        let (mut tab, mut sel, mut edit) = (*tab, *sel, edit.take());
+        let fields = settings::TABS[tab].1;
         let field = fields[sel];
         let mut close = false;
 
@@ -374,26 +377,29 @@ impl App {
                 _ => edit = Some(buf),
             }
         } else {
-            let n = fields.len();
+            let (n, tabs) = (fields.len(), settings::TABS.len());
             let text = settings::is_text(field);
             match k.code {
+                KeyCode::Tab => (tab, sel) = ((tab + 1) % tabs, 0),
+                KeyCode::BackTab => (tab, sel) = ((tab + tabs - 1) % tabs, 0),
+                KeyCode::Char(c @ '1'..='9') if (c as usize - '1' as usize) < tabs => {
+                    (tab, sel) = (c as usize - '1' as usize, 0);
+                }
                 KeyCode::Up | KeyCode::Char('k') => sel = (sel + n - 1) % n,
                 KeyCode::Down | KeyCode::Char('j') => sel = (sel + 1) % n,
                 KeyCode::Enter if text => {
                     let cur = settings::value(&self.cfg, field);
-                    edit = Some(if cur == "terminal" { String::new() } else { cur });
+                    edit = Some(if cur == "terminal" || cur == "none" { String::new() } else { cur });
                 }
                 KeyCode::Left | KeyCode::Right | KeyCode::Char('h' | 'l' | ' ') | KeyCode::Enter if !text => {
                     let dir = if matches!(k.code, KeyCode::Left | KeyCode::Char('h')) { -1 } else { 1 };
-                    match settings::adjust(&mut self.cfg, field, dir) {
-                        Effect::None => {}
-                        Effect::RestartVisualizer => self.viz_restart_at = Some(Instant::now()),
-                        Effect::NextLaunch => self.set_status("applies next time UtaTUI starts"),
-                    }
-                    self.dirty = true;
-                    if field == Field::ArtShow {
-                        self.sync_art();
-                    }
+                    let effect = settings::adjust(&mut self.cfg, field, dir);
+                    self.apply(field, effect);
+                }
+                KeyCode::Char('d') => {
+                    let effect = settings::reset(&mut self.cfg, field);
+                    self.apply(field, effect);
+                    self.set_status(format!("{} reset to default", settings::label(field)));
                 }
                 KeyCode::Char('s') => self.save(),
                 KeyCode::Char('r') => self.revert(),
@@ -401,7 +407,20 @@ impl App {
                 _ => close = self.cfg.action_for(k) == Some(KeyAction::Settings),
             }
         }
-        self.overlay = if close { Overlay::None } else { Overlay::Settings { sel, edit } };
+        self.overlay = if close { Overlay::None } else { Overlay::Settings { tab, sel, edit } };
+    }
+
+    /// Follows up on a settings change: restarts cava or reloads artwork when needed.
+    fn apply(&mut self, field: Field, effect: Effect) {
+        self.dirty = true;
+        match effect {
+            Effect::None => {}
+            Effect::RestartVisualizer => self.viz_restart_at = Some(Instant::now()),
+            Effect::NextLaunch => self.set_status("applies next time UtaTUI starts"),
+        }
+        if field == Field::ArtShow {
+            self.sync_art();
+        }
     }
 
     /// Reloads settings from disk, discarding unsaved changes.

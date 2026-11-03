@@ -14,6 +14,10 @@ pub struct Spectrum<'a> {
     pub values: &'a [f32],
     pub mode: Mode,
     pub spacing: u16,
+    /// Columns per bar; 0 fills the width.
+    pub bar_width: u16,
+    /// Dim line under silent bars.
+    pub baseline: bool,
     pub gradient: &'a [Color],
     pub ascii: bool,
 }
@@ -54,10 +58,12 @@ impl Spectrum<'_> {
     /// Bar columns that fit `width`: (x offset, bar width, resampled values).
     fn layout(&self, width: u16) -> (u16, u16, Vec<f32>) {
         let s = self.spacing;
-        let fit = ((width + s) / (1 + s)).max(1) as usize;
+        let min_bw = self.bar_width.max(1);
+        let fit = ((width + s) / (min_bw + s)).max(1) as usize;
         let values = resample(self.values, fit.min(self.values.len()));
         let n = values.len() as u16;
-        let bw = ((width.saturating_sub(s * (n - 1))) / n).max(1);
+        let auto_bw = ((width.saturating_sub(s * (n - 1))) / n).max(1);
+        let bw = if self.bar_width == 0 { auto_bw } else { self.bar_width.min(auto_bw) };
         let total = n * bw + s * (n - 1);
         ((width.saturating_sub(total)) / 2, bw, values)
     }
@@ -80,7 +86,7 @@ impl Spectrum<'_> {
                 };
                 // A dim baseline under silent bars, so silence doesn't look like a broken widget.
                 let (ch, modifier) = match ch {
-                    ' ' if row == 0 => (if self.ascii { '_' } else { '▁' }, Modifier::DIM),
+                    ' ' if row == 0 && self.baseline => (if self.ascii { '_' } else { '▁' }, Modifier::DIM),
                     ' ' => continue,
                     ch => (ch, Modifier::empty()),
                 };
@@ -199,7 +205,15 @@ mod tests {
     fn resampling_and_layout() {
         assert_eq!(resample(&[1.0, 3.0, 5.0, 7.0], 2), vec![2.0, 6.0]);
         assert_eq!(resample_smooth(&[0.0, 1.0], 3), vec![0.0, 0.5, 1.0]);
-        let s = Spectrum { values: &[0.5; 10], mode: Mode::Bars, spacing: 1, gradient: &[], ascii: false };
+        let s = Spectrum {
+            values: &[0.5; 10],
+            mode: Mode::Bars,
+            spacing: 1,
+            bar_width: 0,
+            baseline: true,
+            gradient: &[],
+            ascii: false,
+        };
         // 10 bars, width 1, spacing 1 = 19 cols, centered in 21.
         assert_eq!(s.layout(21).0, 1);
         assert_eq!(s.layout(5).2.len(), 3); // too narrow: bars merge
@@ -210,8 +224,34 @@ mod tests {
     }
 
     #[test]
+    fn fixed_bar_width() {
+        let s = Spectrum {
+            values: &[1.0; 4],
+            mode: Mode::Bars,
+            spacing: 1,
+            bar_width: 2,
+            baseline: true,
+            gradient: &[],
+            ascii: false,
+        };
+        // 4 bars of 2 columns plus 3 gaps = 11 columns.
+        let (_, bw, values) = s.layout(40);
+        assert_eq!((bw, values.len()), (2, 4));
+        // Too narrow for 2-column bars: bands merge instead of overflowing.
+        assert!(s.layout(5).2.len() < 4);
+    }
+
+    #[test]
     fn silence_draws_baseline() {
-        let s = Spectrum { values: &[0.0; 8], mode: Mode::Bars, spacing: 1, gradient: &[], ascii: false };
+        let s = Spectrum {
+            values: &[0.0; 8],
+            mode: Mode::Bars,
+            spacing: 1,
+            bar_width: 0,
+            baseline: true,
+            gradient: &[],
+            ascii: false,
+        };
         let mut buf = Buffer::empty(Rect::new(0, 0, 20, 4));
         s.render(buf.area, &mut buf);
         // 8 bars, width 1, spacing 1: 15 columns centered in 20, so bars sit at x = 2, 4, ...

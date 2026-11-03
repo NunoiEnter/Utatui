@@ -21,7 +21,10 @@ pub struct Config {
     pub seek_step: u64,
     /// Use plain ASCII glyphs instead of Unicode symbols.
     pub ascii: bool,
+    /// Switch to whichever player starts playing, unless one was picked by hand.
+    pub follow_playing: bool,
     pub theme: Theme,
+    pub layout: LayoutCfg,
     pub artwork: Artwork,
     pub visualizer: Visualizer,
     pub keys: Keys,
@@ -39,10 +42,34 @@ pub struct Theme {
     pub accent_from_artwork: bool,
 }
 
+/// What the player screen shows besides artwork and visualizer.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LayoutCfg {
+    pub show_footer: bool,
+    pub show_album: bool,
+    pub show_controls: bool,
+    /// Scroll titles that are too long to fit instead of cutting them.
+    pub scroll_title: bool,
+    /// Show time remaining (-1:23) instead of the track length.
+    pub remaining_time: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ArtPosition {
+    /// Above the text when there is room, beside it otherwise.
+    #[default]
+    Auto,
+    Top,
+    Side,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Artwork {
     pub show: bool,
+    pub position: ArtPosition,
     /// Fraction of the terminal height the artwork may occupy (0.1 – 0.9).
     pub size: f32,
     /// Graphics protocol: "auto" (query the terminal), "kitty", "sixel", "iterm2" or
@@ -78,6 +105,10 @@ pub struct Visualizer {
     pub bars: u16,
     /// Empty columns between bars.
     pub spacing: u16,
+    /// Columns per bar; 0 sizes bars to fill the width.
+    pub bar_width: u16,
+    /// Draw a dim baseline under silent bars.
+    pub baseline: bool,
     /// Passed to cava (`sensitivity`, percent).
     pub sensitivity: u32,
     /// cava frame rate; also the redraw rate while audio is flowing.
@@ -130,7 +161,9 @@ impl Default for Config {
             preferred_player: None,
             seek_step: 5,
             ascii: false,
+            follow_playing: true,
             theme: Theme::default(),
+            layout: LayoutCfg::default(),
             artwork: Artwork::default(),
             visualizer: Visualizer::default(),
             keys: Keys::default(),
@@ -150,9 +183,21 @@ impl Default for Theme {
     }
 }
 
+impl Default for LayoutCfg {
+    fn default() -> Self {
+        Self {
+            show_footer: true,
+            show_album: true,
+            show_controls: true,
+            scroll_title: true,
+            remaining_time: false,
+        }
+    }
+}
+
 impl Default for Artwork {
     fn default() -> Self {
-        Self { show: true, size: 0.5, protocol: "auto".into() }
+        Self { show: true, position: ArtPosition::Auto, size: 0.5, protocol: "auto".into() }
     }
 }
 
@@ -163,6 +208,8 @@ impl Default for Visualizer {
             mode: Mode::Bars,
             bars: 48,
             spacing: 1,
+            bar_width: 0,
+            baseline: true,
             sensitivity: 100,
             framerate: 60,
             noise_reduction: 77,
