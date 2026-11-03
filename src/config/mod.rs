@@ -212,7 +212,7 @@ impl Default for Artwork {
             show: true,
             position: ArtPosition::Auto,
             shape: ArtShape::Original,
-            size: 0.5,
+            size: 0.6,
             protocol: "auto".into(),
         }
     }

@@ -38,7 +38,7 @@ position = "auto"
 # original | square. "square" crops wide video thumbnails to an album-style square.
 shape = "original"
 # Fraction of the terminal height the artwork may use (0.1 - 0.9).
-size = 0.5
+size = 0.6
 # "auto" asks the terminal; or force "kitty", "sixel", "iterm2", "halfblocks".
 protocol = "auto"
 

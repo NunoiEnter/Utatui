@@ -256,103 +256,135 @@ fn draw_mini(f: &mut Frame, app: &mut App, p: &Player, area: Rect, pal: &Palette
     draw_spectrum(f, app, viz, pal);
 }
 
-/// Regular terminals: a large centered cover with a card below it holding title, artist,
-/// progress and controls, and the visualizer along the bottom.
+/// Regular terminals. Space is handed out by priority: the cover first, then the visualizer,
+/// then the text, which shrinks from a full card down to just the title to fit what is left.
 fn draw_full(f: &mut Frame, app: &mut App, p: &Player, body: Rect, pal: &Palette, g: &Glyphs) {
-    let viz_h = if app.cfg.visualizer.enabled {
-        (body.height.saturating_sub(10) / 2).max(body.height / 3).min(app.cfg.visualizer.height)
-    } else {
-        0
-    };
+    let viz_h =
+        if app.cfg.visualizer.enabled { app.cfg.visualizer.height.min((body.height / 4).max(2)) } else { 0 };
     let [main, viz] = Layout::vertical([Constraint::Fill(1), Constraint::Length(viz_h)]).areas(body);
     draw_spectrum(f, app, viz.inner(Margin::new(viz.width.min(4), 0)), pal);
 
-    let card_w = main.width.min(72);
-    let card_lines = info_lines(app, p, (card_w as usize).saturating_sub(6), pal, g, false).len() as u16;
-    let card_h = card_lines + 2;
     let show_art = app.cfg.artwork.show && app.art.is_some();
-
-    // Largest cover the size setting allows that still leaves room for the card.
-    let size = app.cfg.artwork.size.clamp(0.1, 0.9);
-    let max_art_h = ((main.height as f32 * size) as u16).min(main.height.saturating_sub(card_h + 1));
-    let art_size =
-        if show_art { art_size(app, Size::new(main.width * 9 / 10, max_art_h)) } else { Size::ZERO };
+    let share = app.cfg.artwork.size.clamp(0.1, 0.9);
+    // Stacked: the cover takes its share of the screen, keeping a gap and one row of text.
+    let stacked_h = ((body.height as f32 * share) as u16).min(main.height.saturating_sub(2));
+    let stacked =
+        if show_art { art_size(app, Size::new(main.width * 9 / 10, stacked_h)) } else { Size::ZERO };
+    // Side by side: the cover can use the full height of the player area.
+    let beside_h = (main.height as f32 * (share * 2.0).min(1.0)) as u16;
+    let beside = if show_art { art_size(app, Size::new(main.width * 2 / 5, beside_h)) } else { Size::ZERO };
 
     let side_by_side = show_art
         && match app.cfg.artwork.position {
             ArtPosition::Side => true,
             ArtPosition::Top => false,
-            // Stacked, the cover would be squeezed to a sliver; beside the text it gets the height.
-            ArtPosition::Auto => main.width > main.height * 4 || art_size.height < 4,
+            // Beside the text when that makes the cover clearly bigger, as on short terminals.
+            ArtPosition::Auto => {
+                main.width >= 60 && u32::from(beside.height) * 3 > u32::from(stacked.height) * 4
+            }
         };
     if side_by_side {
-        draw_side_by_side(f, app, p, main, pal, g);
-        return;
-    }
-    if main.height < card_h {
-        // Not even room for the card: plain compact text, centered.
-        let lines = info_lines(app, p, main.width.min(64) as usize, pal, g, true);
-        let [info] =
-            Layout::vertical([Constraint::Length(lines.len() as u16)]).flex(Flex::Center).areas(main);
-        f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), info);
+        draw_side_by_side(f, app, p, main, beside, pal, g);
         return;
     }
 
-    let gap = u16::from(art_size.height > 0);
-    let group_h = art_size.height + gap + card_h;
-    let top = main.y + main.height.saturating_sub(group_h) / 2;
-    if art_size.height > 0 {
+    let gap = u16::from(stacked.height > 0);
+    let card_w = (stacked.width + 8).clamp(40, 72).min(main.width);
+    let (lines, card) =
+        fitted_info(app, p, card_w as usize, main.height.saturating_sub(stacked.height + gap), pal, g);
+    let info_h = lines.len() as u16 + 2 * u16::from(card);
+    let top = main.y + main.height.saturating_sub(stacked.height + gap + info_h) / 2;
+    if stacked.height > 0 {
         let art = Rect {
-            x: main.x + (main.width - art_size.width) / 2,
+            x: main.x + (main.width - stacked.width) / 2,
             y: top,
-            width: art_size.width,
-            height: art_size.height,
+            width: stacked.width,
+            height: stacked.height,
         };
         draw_art(f, app, art);
     }
-    // The card is a little wider than the cover, like a Now Playing widget.
-    let card_w = (art_size.width + 8).clamp(40, 72).min(main.width);
-    let card = Rect {
+    let info = Rect {
         x: main.x + (main.width - card_w) / 2,
-        y: top + art_size.height + gap,
+        y: top + stacked.height + gap,
         width: card_w,
-        height: card_h,
+        height: info_h.min(main.height),
     };
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(pal.dim))
-        .padding(Padding::horizontal(2));
-    let inner = block.inner(card);
-    f.render_widget(block, card);
-    let lines = info_lines(app, p, inner.width as usize, pal, g, false);
-    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), inner);
+    render_info(f, info, lines, card, pal, Alignment::Center);
 }
 
-/// Wide or short terminals: cover on the left at full height, text on the right.
-fn draw_side_by_side(f: &mut Frame, app: &mut App, p: &Player, main: Rect, pal: &Palette, g: &Glyphs) {
-    let margin = u16::from(main.height >= 10);
-    let art_h = main.height - margin * 2;
-    let art_size = art_size(app, Size::new(main.width * 2 / 5, art_h));
-    let text_w = main.width.saturating_sub(art_size.width + 7).min(60);
+/// Short or wide terminals: cover on the left, text on the right.
+fn draw_side_by_side(
+    f: &mut Frame,
+    app: &mut App,
+    p: &Player,
+    main: Rect,
+    art: Size,
+    pal: &Palette,
+    g: &Glyphs,
+) {
+    let text_w = main.width.saturating_sub(art.width + 7).min(60);
     let [_, art_col, _, info_col, _] = Layout::horizontal([
         Constraint::Fill(1),
-        Constraint::Length(art_size.width),
+        Constraint::Length(art.width),
         Constraint::Length(3),
         Constraint::Length(text_w),
         Constraint::Fill(1),
     ])
     .areas(main);
-    let [art] = Layout::vertical([Constraint::Length(art_size.height)]).flex(Flex::Center).areas(art_col);
-    draw_art(f, app, art);
-    let full = info_lines(app, p, text_w as usize, pal, g, false);
-    let lines = if (full.len() as u16) <= main.height {
-        full
-    } else {
-        info_lines(app, p, text_w as usize, pal, g, true)
-    };
-    let [info] =
-        Layout::vertical([Constraint::Length(lines.len() as u16)]).flex(Flex::Center).areas(info_col);
-    f.render_widget(Paragraph::new(lines), info);
+    let [art_rect] = Layout::vertical([Constraint::Length(art.height)]).flex(Flex::Center).areas(art_col);
+    draw_art(f, app, art_rect);
+    let (lines, card) = fitted_info(app, p, text_w as usize, main.height, pal, g);
+    let info_h = lines.len() as u16 + 2 * u16::from(card);
+    let [info] = Layout::vertical([Constraint::Length(info_h)]).flex(Flex::Center).areas(info_col);
+    render_info(f, info, lines, card, pal, if card { Alignment::Center } else { Alignment::Left });
+}
+
+/// The richest text block that fits in `w` x `h`: a full card, a compact card, compact text,
+/// title and progress, or just the title. Returns the lines and whether to frame them.
+fn fitted_info(
+    app: &App,
+    p: &Player,
+    w: usize,
+    h: u16,
+    pal: &Palette,
+    g: &Glyphs,
+) -> (Vec<Line<'static>>, bool) {
+    let h = h as usize;
+    for (compact, card) in [(false, true), (true, true), (true, false)] {
+        let inner_w = if card { w.saturating_sub(6) } else { w };
+        let lines = info_lines(app, p, inner_w, pal, g, compact);
+        if lines.len() + 2 * usize::from(card) <= h {
+            return (lines, card);
+        }
+    }
+    let mut lines =
+        vec![Line::styled(title_text(app, p, w), Style::new().fg(pal.fg).add_modifier(Modifier::BOLD))];
+    if h >= 2
+        && let Some(progress) = progress_line(app, p, w, pal, g)
+    {
+        lines.push(progress);
+    }
+    (lines, false)
+}
+
+fn render_info(
+    f: &mut Frame,
+    area: Rect,
+    lines: Vec<Line<'static>>,
+    card: bool,
+    pal: &Palette,
+    align: Alignment,
+) {
+    let mut paragraph = Paragraph::new(lines).alignment(align);
+    if card {
+        paragraph = paragraph.block(
+            Block::bordered()
+                .border_type(BorderType::Rounded)
+                .border_style(Style::new().fg(pal.dim))
+                .padding(Padding::horizontal(2)),
+        );
+    }
+    f.render_widget(paragraph, area);
 }
 
 /// Artwork is scaled up as well as down, so the size setting works for small thumbnails too.
@@ -909,6 +941,31 @@ mod tests {
             cells.push(art_cells(&render(&mut app, &mut rrx, 120, 50)));
         }
         assert!(cells[0] < cells[1] && cells[1] < cells[2], "artwork did not grow with size: {cells:?}");
+    }
+
+    /// The cover gets priority: at least half the screen height on short terminals, ahead of
+    /// the visualizer and the text card.
+    #[tokio::test]
+    async fn cover_gets_priority_on_short_terminals() {
+        let (mut app, mut rrx) = app_with_art();
+        // Firefox-sized 16:9 thumbnail.
+        let thumb =
+            image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(336, 188, image::Rgb([200, 50, 90])));
+        app.handle(Event::Art { url: "x".into(), img: Some(thumb), accent: None });
+        for (w, h) in [(80, 10), (80, 14), (120, 14), (80, 20), (120, 20), (100, 30)] {
+            let term = render(&mut app, &mut rrx, w, h);
+            let buf = term.backend().buffer();
+            let art = Color::Rgb(200, 50, 90);
+            let row_has =
+                |y: u16, pred: &dyn Fn(&ratatui::buffer::Cell) -> bool| (0..w).any(|x| pred(&buf[(x, y)]));
+            let art_rows = (0..h).filter(|&y| row_has(y, &|c| c.bg == art || c.fg == art)).count();
+            let viz_rows = (0..h).filter(|&y| row_has(y, &|c| c.symbol() == "█")).count();
+            if std::env::var_os("SHOW").is_some() {
+                println!("{w}x{h}: cover {art_rows} rows, visualizer {viz_rows} rows");
+            }
+            assert!(art_rows * 2 >= usize::from(h), "cover too small at {w}x{h}: {art_rows} rows");
+            assert!(viz_rows >= 2, "visualizer missing at {w}x{h}");
+        }
     }
 
     /// The settings page stays usable on small terminals: tabs, options and navigation.
