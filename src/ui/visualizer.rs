@@ -2,7 +2,7 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Color;
+use ratatui::style::{Color, Modifier};
 use ratatui::widgets::Widget;
 
 use crate::config::Mode;
@@ -78,12 +78,15 @@ impl Spectrum<'_> {
                 } else {
                     EIGHTHS[fill]
                 };
-                if ch == ' ' {
-                    continue;
-                }
+                // A dim baseline under silent bars, so silence doesn't look like a broken widget.
+                let (ch, modifier) = match ch {
+                    ' ' if row == 0 => (if self.ascii { '_' } else { '▁' }, Modifier::DIM),
+                    ' ' => continue,
+                    ch => (ch, Modifier::empty()),
+                };
                 let fg = self.color(row as f32 / (h - 1.0).max(1.0));
                 for x in x0..(x0 + bw).min(area.right()) {
-                    buf[(x, y)].set_char(ch).set_fg(fg);
+                    buf[(x, y)].set_char(ch).set_fg(fg).set_style(modifier);
                 }
             }
         }
@@ -204,6 +207,17 @@ mod tests {
         for mode in Mode::ALL {
             Spectrum { mode, ..s }.render(buf.area, &mut buf);
         }
+    }
+
+    #[test]
+    fn silence_draws_baseline() {
+        let s = Spectrum { values: &[0.0; 8], mode: Mode::Bars, spacing: 1, gradient: &[], ascii: false };
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 4));
+        s.render(buf.area, &mut buf);
+        // 8 bars, width 1, spacing 1: 15 columns centered in 20, so bars sit at x = 2, 4, ...
+        assert_eq!(buf[(2, 3)].symbol(), "▁");
+        assert_eq!(buf[(3, 3)].symbol(), " ");
+        assert_eq!(buf[(2, 2)].symbol(), " ");
     }
 
     #[test]
